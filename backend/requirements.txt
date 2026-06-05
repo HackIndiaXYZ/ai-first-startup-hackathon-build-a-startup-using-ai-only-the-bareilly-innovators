@@ -1,0 +1,22 @@
+fastapi>=0.104.0
+uvicorn>=0.24.0
+pydantic>=2.5.0
+speechrecognition>=3.10.0
+pyttsx3>=2.90
+pyautogui>=0.9.54
+opencv-python>=4.8.0
+python-dotenv>=1.0.0
+google-genai>=2.5.0
+requests>=2.31.0
+pywin32>=306
+keyboard>=0.13.5
+mouse>=0.7.1
+psutil>=5.9.0
+pillow>=10.0.0
+numpy>=1.26.0
+# MYRA Voice Engine
+websockets>=12.0
+sounddevice>=0.4.6
+# Option B - Custom Wake Word selected
+openwakeword>=0.5.1
+pyaudio>=0.2.13
