@@ -1,4 +1,5 @@
 import os
+import json
 
 try:
     from google import genai
@@ -8,20 +9,31 @@ except ImportError:
     _genai_available = False
 
 
+def _get_api_key():
+    key = os.getenv("GEMINI_API_KEY")
+    if key: return key
+    try:
+        settings_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sivi_settings.json")
+        with open(settings_path, "r") as f:
+            return json.load(f).get("api_key")
+    except Exception:
+        return None
+
+
 class MedicalAssistant:
     def __init__(self):
-        key = os.getenv("GEMINI_API_KEY")
-        if key and _genai_available:
-            self.client = genai.Client(api_key=key)
-            self.model_name = 'gemini-2.5-flash'
-        else:
-            self.client = None
-            self.model_name = None
-            if not _genai_available:
-                print(" google.genai not installed. Medical AI offline.")
+        self.model_name = 'gemini-2.5-flash'
+        if not _genai_available:
+            print(" google.genai not installed. Medical AI offline.")
+
+    def _get_client(self):
+        if not _genai_available: return None
+        key = _get_api_key()
+        return genai.Client(api_key=key) if key else None
 
     def get_advice(self, query: str) -> str:
-        if not self.client:
+        client = self._get_client()
+        if not client:
             return "Medical AI offline. Missing Gemini API key or package."
 
         print(f" Consulting Medical AI for: {query}")

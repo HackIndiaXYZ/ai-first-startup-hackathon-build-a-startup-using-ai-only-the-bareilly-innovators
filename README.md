@@ -62,6 +62,14 @@ SPOTIPY_REDIRECT_URI=http://localhost:8888/callback
 
 ## 🏃‍♂️ Running the Assistant
 
+**Easiest Way (Windows):**
+Simply double-click the **`start_titan.bat`** file located in the root directory. 
+This smart script will automatically:
+1. Search for and terminate any lingering or frozen TITAN processes from your last session.
+2. Free up ports 8000 and 5173 to prevent socket bind errors.
+3. Launch the Backend, Wake Word Listener, and Frontend in clean, separate windows.
+
+**Manual Way:**
 You need to start both the backend bridge server and the frontend UI.
 
 **1. Start the Backend API (Port 8000)**

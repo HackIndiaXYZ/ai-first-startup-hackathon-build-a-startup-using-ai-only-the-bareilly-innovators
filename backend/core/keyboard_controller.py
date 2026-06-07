@@ -71,6 +71,9 @@ class KeyboardController:
             "close":       ["alt", "f4"],
             "screenshot":  ["win", "shift", "s"],
             "new tab":     ["ctrl", "t"],
+            "close tab":   ["ctrl", "w"],
+            "next tab":    ["ctrl", "tab"],
+            "previous tab":["ctrl", "shift", "tab"],
             "new window":  ["ctrl", "n"],
             "refresh":     "f5",
         }

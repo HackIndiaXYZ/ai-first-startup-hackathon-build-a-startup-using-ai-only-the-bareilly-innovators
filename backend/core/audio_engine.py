@@ -144,7 +144,7 @@ class AudioEngine:
                         if self.on_audio_chunk:
                             # Soft Noise Gate: Send pure mathematical silence if below static threshold
                             # This prevents Gemini from hallucinating words from background fan noise
-                            if rms < 0.003:
+                            if rms < 0.006:  # Raised threshold: prevents fan noise but catches quiet voices
                                 self.on_audio_chunk(b'\x00' * len(pcm_bytes))
                             else:
                                 self.on_audio_chunk(pcm_bytes)

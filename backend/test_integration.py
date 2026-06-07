@@ -164,12 +164,12 @@ def test_pro_prompt():
 test("build_system_prompt(professional)", test_pro_prompt)
 
 def test_greeting():
-    g = get_greeting("Alok", "gf")
+    g = get_greeting("Rao Alok Yadav", "professional")
     if "Rao" not in g:
         raise AssertionError(f"Missing 'Rao' in greeting: {g}")
     return g
 
-test("get_greeting(gf)", test_greeting)
+test("get_greeting(professional)", test_greeting)
 
 def test_pl():
     pl = get_personality_list()

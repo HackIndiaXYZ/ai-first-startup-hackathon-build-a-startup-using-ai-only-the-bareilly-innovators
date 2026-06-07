@@ -23,18 +23,23 @@ class CustomWakeWordEngine:
 
         try:
             # Initialize OpenWakeWord with the specific model
-            self.oww_model = Model(
-                wakeword_models=[self.model_path],
-                inference_framework="onnx"
-            )
+            if self.model_path and self.model_path.endswith(".onnx") and os.path.exists(self.model_path):
+                self.oww_model = Model(
+                    wakeword_models=[self.model_path],
+                    inference_framework="onnx"
+                )
+                self.use_google_fallback = False
+            else:
+                raise ValueError("ONNX model not found")
         except Exception as e:
-            print(f" Failed to load model '{self.model_path}': {e}")
-            print(" Falling back to 'hey_jarvis' default model...")
-            self.model_path = "hey_jarvis"
-            self.oww_model = Model(
-                wakeword_models=[self.model_path],
-                inference_framework="onnx"
-            )
+            print(f" Custom ONNX model not found or failed ({e}).")
+            print(" Using Google STT Fallback to listen for 'Hey Sivi' (requires internet).")
+            print(" To run purely offline, generate a 'hey_sivi.onnx' model using OpenWakeWord.")
+            self.use_google_fallback = True
+            import speech_recognition as sr
+            self.recognizer = sr.Recognizer()
+            self.recognizer.energy_threshold = 400
+            self.recognizer.dynamic_energy_threshold = True
 
         # PyAudio Setup
         self.FORMAT = pyaudio.paInt16
@@ -46,8 +51,35 @@ class CustomWakeWordEngine:
         self._running = False
 
     def start_listening(self, callback):
-        print(" Starting microphone stream for Wake Word detection...")
         self._running = True
+        
+        if getattr(self, "use_google_fallback", False):
+            import speech_recognition as sr
+            with sr.Microphone() as source:
+                print(" Adjusting for ambient noise...")
+                self.recognizer.adjust_for_ambient_noise(source, duration=1)
+                print(" Listening for 'Hey Sivi' (Google STT)...")
+                while self._running:
+                    try:
+                        audio = self.recognizer.listen(source, timeout=1, phrase_time_limit=3)
+                        text = self.recognizer.recognize_google(audio).lower()
+                        print(f" [STT Heard]: {text}")
+                        if "sivi" in text or "see we" in text or "tv" in text or "cb" in text or "hey siri" in text:
+                            print(" Wake word 'Hey Sivi' detected!")
+                            callback()
+                            import time
+                            time.sleep(3) # cooldown
+                    except sr.WaitTimeoutError:
+                        continue
+                    except sr.UnknownValueError:
+                        continue
+                    except Exception as e:
+                        print(f" STT Fallback error: {e}")
+                        import time
+                        time.sleep(1)
+            return
+
+        print(" Starting microphone stream for Wake Word detection...")
         self.mic_stream = self._audio.open(
             format=self.FORMAT,
             channels=self.CHANNELS,

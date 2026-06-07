@@ -112,6 +112,9 @@ def load_settings() -> dict:
         try:
             with open(SETTINGS_FILE, "r") as f:
                 saved = json.load(f)
+                # If API key in settings file is a placeholder or empty, do not use it to overwrite default env var
+                if saved.get("api_key") in ["", "YOUR_API_KEY_HERE", "placeholder"]:
+                    saved.pop("api_key", None)
                 defaults.update(saved)
         except Exception:
             pass
@@ -195,14 +198,15 @@ def on_turn_complete(user_text: str, sivi_text: str):
     """Full turn complete — add to chat and parse commands."""
     logger.info(f"Turn: User='{user_text[:60]}' | Sivi='{sivi_text[:60]}'")
 
-    # Extract PC Command from Sivi's text
-    extracted_cmd = ""
+    # Extract PC Commands from Sivi's text
+    extracted_cmds = []
     if sivi_text:
-        match = re.search(r'\[CMD:\s*(.*?)\]', sivi_text, re.IGNORECASE)
-        if match:
-            extracted_cmd = match.group(1).strip()
-            # Remove the command tag from the visible text
-            sivi_text = re.sub(r'\[CMD:\s*.*?\]', '', sivi_text, flags=re.IGNORECASE).strip()
+        # Find all command tags (e.g. [CMD: open notepad] [CMD: snap to left])
+        matches = re.finditer(r'\[CMD:\s*(.*?)\]', sivi_text, re.IGNORECASE)
+        for match in matches:
+            extracted_cmds.append(match.group(1).strip())
+        # Remove the command tags from the visible text
+        sivi_text = re.sub(r'\[CMD:\s*.*?\]', '', sivi_text, flags=re.IGNORECASE).strip()
 
     # Add to chat
     if user_text:
@@ -223,76 +227,91 @@ def on_turn_complete(user_text: str, sivi_text: str):
         
     save_chat_history()
 
-    # Execute the extracted command
-    if extracted_cmd:
-        cmd = parse_command(extracted_cmd)
-        if cmd:
-            logger.info(f"Parsed command from tag: {cmd.type} -> {cmd.params}")
+    # Execute the extracted commands sequentially
+    if extracted_cmds:
+        async def _execute_and_feedback():
+            all_feedback = []
+            has_error = False
             
-            if cmd.type == "SWITCH_MODE":
-                mode = cmd.params.get("mode", "gf")
-                settings["personality_mode"] = mode
-                save_settings(settings)
-                result = f"Personality mode updated to {mode}. Restarting brain to apply..."
-                broadcast_sync({"type": "settings_updated", "settings": settings})
-                async def _delayed_switch():
-                    # Allow Sivi to finish her sentence before abruptly killing the audio engine
-                    await asyncio.sleep(3.5)
-                    await start_voice_session(is_switch=True)
+            for extracted_cmd in extracted_cmds:
+                cmd = parse_command(extracted_cmd)
+                if not cmd:
+                    logger.warning(f"Failed to parse AI command tag: {extracted_cmd}")
+                    all_feedback.append(f"SYSTEM_ERROR: The command tag `[CMD: {extracted_cmd}]` was not recognized.")
+                    has_error = True
+                    continue
+                    
+                logger.info(f"Parsed command from tag: {cmd.type} -> {cmd.params}")
+                
+                if cmd.type == "SWITCH_MODE":
+                    mode = cmd.params.get("mode", "gf")
+                    settings["personality_mode"] = mode
+                    save_settings(settings)
+                    broadcast_sync({"type": "settings_updated", "settings": settings})
+                    all_feedback.append(f"System: Personality switched to {mode}.")
+                    # Allow switch to happen after other commands finish
+                    asyncio.run_coroutine_threadsafe(asyncio.sleep(2), _main_loop)
+                    continue
 
-                if _main_loop:
-                    asyncio.run_coroutine_threadsafe(_delayed_switch(), _main_loop)
-            else:
-                async def _execute_and_feedback():
-                    try:
-                        # Offload blocking execution to a separate thread to prevent deadlocking Gemini loop
-                        result = await asyncio.to_thread(controller.execute_command, cmd)
+                try:
+                    # Offload blocking execution to a separate thread
+                    result = await asyncio.to_thread(controller.execute_command, cmd)
+                    
+                    if result:
+                        entry = {
+                            "type": "command",
+                            "command": extracted_cmd,
+                            "response": result,
+                            "timestamp": datetime.now().isoformat()
+                        }
+                        broadcast_sync(entry)
                         
-                        if result:
-                            entry = {
-                                "type": "command",
-                                "command": extracted_cmd,
-                                "response": result,
-                                "timestamp": datetime.now().isoformat()
-                            }
-                            broadcast_sync(entry)
-                            
-                            # Feed sensory/complex commands back to Sivi so she speaks it naturally
-                            dev_commands = ["DEV_RUN_CMD", "DEV_GIT_STATUS", "DEV_KILL_PORT", "DEV_ANALYZE_CODE", "DEV_GENERATE_CODE"]
-                            speak_commands = ["READ_CLIPBOARD", "READ_WINDOWS", "ANALYZE_EMOTION", "DESCRIBE_SCENE", "SYSTEM_STATUS", "READ_SCREEN", "NEWS", "SEARCH", "OPEN_APP", "FIND_FILE", "LIST_FILES", "CALENDAR_EVENTS"]
-                            
-                            if isinstance(result, str) and result.startswith("SYSTEM_ERROR:"):
-                                if gemini_client and gemini_client.is_connected:
-                                    error_prompt = f"CRITICAL ERROR: Your last command ({cmd.type}) failed with: {result}. Please apologize to the user and if you can, use your Developer Tools ([CMD: dev run cmd], [CMD: dev generate code]) to automatically debug and fix this issue on the system yourself!"
-                                    await gemini_client.send_text(error_prompt)
-                            elif cmd.type in speak_commands or cmd.type in dev_commands:
-                                if gemini_client and gemini_client.is_connected:
-                                    if cmd.type == "ANALYZE_EMOTION":
-                                        feedback_prompt = (f"I just looked at the user through the webcam. Here is the visual analysis: '{result}'. "
-                                                           f"Respond to them in your Hinglish persona (e.g. 'Aapka mood sahi nahi hai, kya hua aapko?'). "
-                                                           f"Deeply analyze their state, try to convince them to be happy, and offer a specific action like playing a song or telling a joke.")
-                                    elif cmd.type == "DESCRIBE_SCENE":
-                                        feedback_prompt = f"I took a photo. Here is what I see: '{result}'. Describe this naturally to the user in your persona."
-                                    elif cmd.type in dev_commands:
-                                        feedback_prompt = f"System executed your developer command. Here is the raw terminal/system output:\n{result}\nPlease explain this output technically to the user in your Developer Persona."
-                                    elif cmd.type == "READ_SCREEN":
-                                        feedback_prompt = f"Here is the raw text from the screen: {result}\nPlease summarize this or read it aloud naturally to the user."
-                                    elif cmd.type == "OPEN_APP":
-                                        feedback_prompt = f"System attempted to open the app. Result: {result}\nIf it failed, tell the user gracefully and ask if they'd like you to search for it online or do something else. If it succeeded, confirm it playfully/professionally."
-                                    else:
-                                        feedback_prompt = f"System Action Result: {result}\nPlease convey this to the user naturally."
-                                        
-                                    await gemini_client.send_text(feedback_prompt)
-                    except Exception as e:
-                        logger.error(f"Command execution error: {e}")
+                        dev_commands = ["DEV_RUN_CMD", "DEV_GIT_STATUS", "DEV_KILL_PORT", "DEV_ANALYZE_CODE", "DEV_GENERATE_CODE", "DEV_EXECUTE_SCRIPT", "DEV_SPAWN_SUBAGENT"]
+                        speak_commands = [
+                            "READ_CLIPBOARD", "READ_WINDOWS", "ANALYZE_EMOTION", "DESCRIBE_SCENE",
+                            "SYSTEM_STATUS", "GET_WEATHER", "READ_SCREEN", "NEWS", "SEARCH", "OPEN_APP",
+                            "FIND_FILE", "LIST_FILES", "CALENDAR_EVENTS", "CREATE_EVENT",
+                            "MEDICAL_ADVICE", "WRITE_CLIPBOARD", "CLOSE_APP", "SWITCH_APP", "TYPE_TEXT",
+                            "PRESS_KEY", "SCREENSHOT", "VOLUME_SET", "SET_TIMER",
+                            "CREATE_FILE", "CREATE_FOLDER", "DELETE_FILE", "OPEN_FILE",
+                            "MINIMIZE_WINDOW", "MAXIMIZE_WINDOW", "SNAP_LEFT", "SNAP_RIGHT",
+                            "TAB_NEXT", "TAB_PREV", "TAB_NEW", "TAB_CLOSE",
+                            "WIFI_ON", "WIFI_OFF", "BLUETOOTH_ON", "BLUETOOTH_OFF",
+                            "REMEMBER", "FORGET_ALL", "SEND_EMAIL", "SEND_WHATSAPP",
+                            "PLAY_YOUTUBE", "PLAY_SPOTIFY",
+                        ]
+                        
+                        if isinstance(result, str) and result.startswith("SYSTEM_ERROR:"):
+                            all_feedback.append(f"CRITICAL ERROR on {cmd.type}: {result}")
+                            has_error = True
+                        elif cmd.type in speak_commands or cmd.type in dev_commands:
+                            if cmd.type == "ANALYZE_EMOTION":
+                                all_feedback.append(f"Visual analysis result: '{result}'. Deeply analyze their state in your persona.")
+                            elif cmd.type == "DESCRIBE_SCENE":
+                                all_feedback.append(f"Photo analysis: '{result}'.")
+                            elif cmd.type in dev_commands:
+                                all_feedback.append(f"Raw terminal/system output for {cmd.type}:\n{result}")
+                            elif cmd.type == "READ_SCREEN":
+                                all_feedback.append(f"Raw text from screen: {result}")
+                            elif cmd.type == "OPEN_APP":
+                                all_feedback.append(f"App open result: {result}")
+                            else:
+                                all_feedback.append(f"{cmd.type} result: {result}")
+                                
+                except Exception as e:
+                    logger.error(f"Command execution error: {e}")
+                    all_feedback.append(f"ERROR executing {cmd.type}: {e}")
+                    has_error = True
 
-                if _main_loop:
-                    asyncio.run_coroutine_threadsafe(_execute_and_feedback(), _main_loop)
-        else:
-            logger.warning(f"Failed to parse AI command tag: {extracted_cmd}")
-            if gemini_client and gemini_client.is_connected and _main_loop:
-                error_prompt = f"SYSTEM_ERROR: Your command tag `[CMD: {extracted_cmd}]` was not recognized by the parser. Please refer to your instructions for the correct command syntax and try again, or use [CMD: remember ...] to memorize the correct mapping if the user just taught it to you."
-                asyncio.run_coroutine_threadsafe(gemini_client.send_text(error_prompt), _main_loop)
+            # Send single batched feedback back to Gemini
+            if all_feedback and gemini_client and gemini_client.is_connected:
+                final_prompt = "System Actions Results:\n- " + "\n- ".join(all_feedback) + "\nPlease convey this sequentially or concisely to the user naturally."
+                if has_error:
+                    final_prompt += "\nSome commands failed. Please apologize and explain the failures."
+                await gemini_client.send_text(final_prompt)
+
+        if _main_loop:
+            asyncio.run_coroutine_threadsafe(_execute_and_feedback(), _main_loop)
 
     # Update state
     sivi_state["orb_state"] = "listening"

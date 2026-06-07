@@ -6,17 +6,15 @@ Parses all commands and routes them to the correct module.
 import os
 import re
 import sys
+import threading
 
-# Ensure core/ is always on path regardless of how this module is loaded
 _CORE_DIR = os.path.dirname(os.path.abspath(__file__))
 if _CORE_DIR not in sys.path:
     sys.path.insert(0, _CORE_DIR)
 
 from dotenv import load_dotenv
-
 load_dotenv(os.path.join(_CORE_DIR, "..", ".env"))
 
-# Import all core modules
 from app_launcher import app_launcher
 from system_controller import system_controller
 from window_manager import window_manager
@@ -30,8 +28,8 @@ from command_parser import parse_command, PCCommand
 from system_monitor import system_monitor
 from memory_vault import memory_vault
 from dev_tools import dev_tools
+from web_scraper import web_scraper
 
-# Guarded imports (modules that may fail if not configured)
 try:
     from camera_vision import camera_vision
     _camera_available = True
@@ -44,28 +42,24 @@ try:
     _medical_available = True
 except Exception as e:
     _medical_available = False
-    print(f" medical unavailable: {e}")
 
 try:
     from jarvis_email import email_manager
     _email_available = True
 except Exception as e:
     _email_available = False
-    print(f" email unavailable: {e}")
 
 try:
     from gnews import news_fetcher
     _news_available = True
 except Exception as e:
     _news_available = False
-    print(f" news unavailable: {e}")
 
 try:
     from mobile_controller import mobile_controller
     _mobile_available = True
 except Exception as e:
     _mobile_available = False
-    print(f" mobile_controller unavailable: {e}")
 
 try:
     from spotify_controller import spotify_controller
@@ -95,9 +89,9 @@ except Exception as e:
 class JarvisController:
     def __init__(self):
         self.history: list[str] = []
+        self._timers: dict[str, threading.Timer] = {}
 
     def get_module_status(self) -> list[dict]:
-        """Returns status of all modules for the dashboard."""
         return [
             {"name": "App Launcher",        "file": "app_launcher.py",       "status": "active"},
             {"name": "System Controller",   "file": "system_controller.py",  "status": "active"},
@@ -121,20 +115,16 @@ class JarvisController:
             {"name": "Developer Tools",     "file": "dev_tools.py",          "status": "active"},
         ]
 
-
-
     def process_command(self, text: str) -> str:
         print(f"\n Brain received command: '{text}'")
         text_lower = text.lower().strip()
         self.history.append(text_lower)
 
-        # Hindi detection and translation
         translated = hindi_voice.try_translate(text_lower)
         if translated != text_lower:
             print(f"    Hindi detected, translated: '{translated}'")
             text_lower = translated
 
-        # Plugin check first (highest priority for custom commands)
         if _plugins_available:
             plugin_result = plugin_manager.try_handle(text_lower)
             if plugin_result:
@@ -142,7 +132,6 @@ class JarvisController:
 
         cmd = parse_command(text_lower)
         if not cmd:
-            # Special fallback for local LLM if asked
             if _local_llm_available and ("use local ai" in text_lower or "use cloud ai" in text_lower):
                 return local_llm.switch_mode(text_lower)
             return "Command not recognized. Try 'open notepad', 'play music', 'news', or 'take photo'."
@@ -152,84 +141,183 @@ class JarvisController:
     def execute_command(self, cmd: PCCommand) -> str:
         t = cmd.type
         p = cmd.params
-        
+
         try:
-            if t == "OPEN_APP": return app_launcher.launch_app(p.get("raw") or p.get("app_name"))
-            if t == "CLOSE_APP": return window_manager.close_window(p.get("app_name"))
+            # ── App control ──────────────────────────────────────
+            if t == "OPEN_APP":   return app_launcher.launch_app(p.get("raw") or p.get("app_name"))
+            if t == "CLOSE_APP":  return window_manager.close_window(p.get("app_name"))
+            if t == "SWITCH_APP": return window_manager.focus_window(p.get("app_name"))
+
+            # ── Browser Tabs ─────────────────────────────────────
+            if t == "TAB_NEW":    return keyboard_controller.press_key("new tab")
+            if t == "TAB_CLOSE":  return keyboard_controller.press_key("close tab")
+            if t == "TAB_NEXT":   return keyboard_controller.press_key("next tab")
+            if t == "TAB_PREV":   return keyboard_controller.press_key("previous tab")
+
+            # ── Media / YouTube / Spotify ─────────────────────────
             if t == "PLAY_YOUTUBE": return app_launcher.play_on_youtube(p.get("query"))
-            if t == "PLAY_SPOTIFY": return spotify_controller.handle_command("spotify play " + p.get("query", "")) if _spotify_available else "Spotify unavailable"
+            if t == "PLAY_SPOTIFY":
+                return spotify_controller.handle_command("spotify play " + p.get("query", "")) if _spotify_available else "Spotify is not configured."
+
+            # ── Search ────────────────────────────────────────────
             if t == "SEARCH": return app_launcher.google_search(p.get("query"))
+
+            # ── Keyboard ──────────────────────────────────────────
             if t == "TYPE_TEXT": return keyboard_controller.type_text(p.get("text"))
             if t == "PRESS_KEY": return keyboard_controller.press_key(p.get("key"))
-            if t == "MOUSE_CLICK": return mouse_controller.click(button=p.get("button", "left"), double=p.get("double", False))
-            if t == "MOUSE_SCROLL": return mouse_controller.scroll(500 if p.get("direction") == "up" else -500)
-            if t == "MOUSE_MOVE": 
+
+            # ── Mouse ─────────────────────────────────────────────
+            if t == "MOUSE_CLICK":
+                return mouse_controller.click(button=p.get("button", "left"), double=p.get("double", False))
+            if t == "MOUSE_SCROLL":
+                return mouse_controller.scroll(500 if p.get("direction") == "up" else -500)
+            if t == "MOUSE_MOVE":
                 amt = p.get("amount", 200)
                 d = p.get("direction")
-                return mouse_controller.move_by(0, -amt) if d == "up" else mouse_controller.move_by(0, amt) if d == "down" else mouse_controller.move_by(-amt, 0) if d == "left" else mouse_controller.move_by(amt, 0)
+                if d == "up":    return mouse_controller.move_by(0, -amt)
+                if d == "down":  return mouse_controller.move_by(0, amt)
+                if d == "left":  return mouse_controller.move_by(-amt, 0)
+                return mouse_controller.move_by(amt, 0)
             if t == "MOUSE_MOVE_TO":
                 return mouse_controller.move_to(p.get("x", 0), p.get("y", 0))
-            if t == "VOLUME_UP": return system_controller.volume_up()
+
+            # ── Volume ────────────────────────────────────────────
+            if t == "VOLUME_UP":   return system_controller.volume_up()
             if t == "VOLUME_DOWN": return system_controller.volume_down()
-            if t == "MUTE": return system_controller.mute_volume()
+            if t == "MUTE":        return system_controller.mute_volume()
+            if t == "VOLUME_SET":
+                return system_controller.set_volume(p.get("level", 50))
+
+            # ── Power ─────────────────────────────────────────────
             if t == "LOCK_SCREEN": return system_controller.lock_screen()
-            if t == "SHUTDOWN": return system_controller.shutdown()
-            if t == "RESTART": return system_controller.restart()
-            if t == "SLEEP": return system_controller.sleep_mode()
-            if t == "BRIGHTNESS_UP": return system_controller.brightness_up()
+            if t == "SHUTDOWN":    return system_controller.shutdown()
+            if t == "RESTART":     return system_controller.restart()
+            if t == "SLEEP":       return system_controller.sleep_mode()
+
+            # ── Brightness ────────────────────────────────────────
+            if t == "BRIGHTNESS_UP":   return system_controller.brightness_up()
             if t == "BRIGHTNESS_DOWN": return system_controller.brightness_down()
+
+            # ── Window management ─────────────────────────────────
             if t == "MINIMIZE_WINDOW": return window_manager.minimize_window(p.get("app_name"))
             if t == "MAXIMIZE_WINDOW": return window_manager.maximize_window(p.get("app_name"))
+            if t == "SNAP_LEFT":  return window_manager.snap_left()
+            if t == "SNAP_RIGHT": return window_manager.snap_right()
             if t == "READ_WINDOWS": return window_reader.get_active_windows()
+
+            # ── Screen ────────────────────────────────────────────
             if t == "READ_SCREEN": return screen_reader.read_screen("read my screen")
-            if t == "SCREENSHOT": return "Screenshot captured."
-            if t == "WIFI_ON": return system_controller.toggle_wifi()
-            if t == "WIFI_OFF": return system_controller.toggle_wifi()
-            if t == "BLUETOOTH_ON": return system_controller.toggle_bluetooth()
-            if t == "BLUETOOTH_OFF": return system_controller.toggle_bluetooth()
+            if t == "SCREENSHOT":  return system_controller.take_screenshot()
+
+            # ── Connectivity ──────────────────────────────────────
+            if t == "WIFI_ON":        return system_controller.wifi_on()
+            if t == "WIFI_OFF":       return system_controller.wifi_off()
+            if t == "BLUETOOTH_ON":   return system_controller.bluetooth_on()
+            if t == "BLUETOOTH_OFF":  return system_controller.bluetooth_off()
+
+            # ── Media keys ────────────────────────────────────────
             if t == "MEDIA_PLAY_PAUSE": return system_controller.media_play_pause()
-            if t == "MEDIA_NEXT": return system_controller.media_next()
-            if t == "MEDIA_PREV": return system_controller.media_prev()
-            if t == "READ_CLIPBOARD": return system_controller.read_clipboard()
+            if t == "MEDIA_NEXT":       return system_controller.media_next()
+            if t == "MEDIA_PREV":       return system_controller.media_prev()
+
+            # ── Clipboard ─────────────────────────────────────────
+            if t == "READ_CLIPBOARD":  return system_controller.read_clipboard()
             if t == "WRITE_CLIPBOARD": return system_controller.write_clipboard(p.get("text"))
-            if t == "NEWS": return news_fetcher.get_top_headlines() if _news_available else "News module is offline. Please check your GNews API key."
-            if t == "CALENDAR_EVENTS": return calendar_manager.get_today_events() if _calendar_available else "Calendar offline"
-            if t == "CREATE_EVENT": 
+
+            # ── News ──────────────────────────────────────────────
+            if t == "NEWS":
+                return news_fetcher.get_top_headlines() if _news_available else "News module offline. Check your GNews API key."
+
+            # ── Calendar ──────────────────────────────────────────
+            if t == "CALENDAR_EVENTS":
+                return calendar_manager.get_today_events() if _calendar_available else "Calendar is offline."
+            if t == "CREATE_EVENT":
                 if not p.get("title"): return "What event would you like to schedule?"
-                return calendar_manager.create_event(p.get("title")) if _calendar_available else "Calendar offline"
-            if t == "MEDICAL_ADVICE": return medical_assistant.get_advice(p.get("query")) if _medical_available else "Medical AI offline"
-            if t == "SEND_EMAIL": 
+                return calendar_manager.create_event(p.get("title")) if _calendar_available else "Calendar offline."
+
+            # ── Medical ───────────────────────────────────────────
+            if t == "MEDICAL_ADVICE":
+                return medical_assistant.get_advice(p.get("query")) if _medical_available else "Medical AI offline."
+
+            # ── Email / WhatsApp ──────────────────────────────────
+            if t == "SEND_EMAIL":
                 if not p.get("to"): return "Format: 'send email to NAME saying MESSAGE'"
-                return email_manager.send_email(f"{p.get('to')}@gmail.com", "Message from Sivi", p.get("content")) if _email_available else "Email offline"
+                return email_manager.send_email(f"{p.get('to')}@gmail.com", "Message from Sivi", p.get("content")) if _email_available else "Email offline."
             if t == "SEND_WHATSAPP":
                 if not p.get("number"): return "Format: 'send message to NUMBER saying TEXT'"
-                return mobile_controller.send_whatsapp_message(p.get("number"), p.get("content")) if _mobile_available else "Mobile offline"
-            if t == "CREATE_FILE": return file_manager.create_file(p.get("name"))
+                return mobile_controller.send_whatsapp_message(p.get("number"), p.get("content")) if _mobile_available else "Mobile offline."
+
+            # ── Files ─────────────────────────────────────────────
+            if t == "CREATE_FILE":   return file_manager.create_file(p.get("name"))
             if t == "CREATE_FOLDER": return file_manager.create_folder(p.get("name"))
-            if t == "DELETE_FILE": return file_manager.delete_file(p.get("name"))
-            if t == "FIND_FILE": return file_manager.find_file(p.get("name"))
-            if t == "LIST_FILES": return file_manager.list_files(p.get("folder"))
+            if t == "DELETE_FILE":   return file_manager.delete_file(p.get("name"))
+            if t == "FIND_FILE":     return file_manager.find_file(p.get("name"))
+            if t == "LIST_FILES":    return file_manager.list_files(p.get("folder"))
+            if t == "OPEN_FILE":     return file_manager.open_file(p.get("name"))
+
+            # ── System Status / Memory / Weather ────────────────────────────
             if t == "SYSTEM_STATUS": return system_monitor.get_system_status()
-            if t == "REMEMBER": return memory_vault.remember(p.get("fact"))
+            if t == "GET_WEATHER":   return web_scraper.get_weather(p.get("location", "Delhi"))
+            if t == "REMEMBER":  return memory_vault.remember(p.get("fact"))
             if t == "FORGET_ALL": return memory_vault.forget_all()
-            if t == "ANALYZE_EMOTION": return camera_vision.analyze_emotion() if _camera_available else "Camera module is offline. Please check your Gemini API key."
-            if t == "DESCRIBE_SCENE": return camera_vision.describe_scene() if _camera_available else "Camera module is offline. Please check your Gemini API key."
-            
-            # Developer Tools
-            if t == "DEV_RUN_CMD": return dev_tools.run_command(p.get("command"))
-            if t == "DEV_GIT_STATUS": return dev_tools.get_git_status()
-            if t == "DEV_KILL_PORT": return dev_tools.kill_port(p.get("port"))
+
+            # ── Camera / Vision ───────────────────────────────────
+            if t == "ANALYZE_EMOTION":
+                return camera_vision.analyze_emotion() if _camera_available else "Camera module offline."
+            if t == "DESCRIBE_SCENE":
+                return camera_vision.describe_scene() if _camera_available else "Camera module offline."
+
+            # ── Timer ─────────────────────────────────────────────
+            if t == "SET_TIMER":
+                return self._set_timer(p.get("seconds", 60), p.get("label", "Timer"))
+
+            # ── Developer Tools ───────────────────────────────────
+            if t == "DEV_RUN_CMD":      return dev_tools.run_command(p.get("command"))
+            if t == "DEV_GIT_STATUS":   return dev_tools.get_git_status()
+            if t == "DEV_KILL_PORT":    return dev_tools.kill_port(p.get("port"))
             if t == "DEV_ANALYZE_CODE": return dev_tools.analyze_code(p.get("filename"))
             if t == "DEV_GENERATE_CODE": return dev_tools.generate_code(p.get("filename"), p.get("instructions"))
-            if t == "DEV_OPEN_EDITOR": return dev_tools.open_in_editor(p.get("filename"))
+            if t == "DEV_EXECUTE_SCRIPT":return dev_tools.execute_python_script(p.get("goal"))
+            if t == "DEV_SPAWN_SUBAGENT":return dev_tools.spawn_subagent(p.get("goal"))
+            if t == "DEV_OPEN_EDITOR":  return dev_tools.open_in_editor(p.get("filename"))
             if t == "DEV_CLOSE_EDITOR": return dev_tools.close_current_file()
-            
-            return f"Command {t} not fully mapped in controller."
+
+            return f"Command '{t}' is not fully mapped in the controller."
+
         except Exception as e:
             import traceback
-            error_trace = traceback.format_exc()
-            print(f"CRITICAL MODULE ERROR:\n{error_trace}")
-            return f"SYSTEM_ERROR: Command execution failed with exception: {e}"
+            print(f"CRITICAL MODULE ERROR:\n{traceback.format_exc()}")
+            return f"SYSTEM_ERROR: Command execution failed: {e}"
+
+    def _set_timer(self, seconds: int, label: str) -> str:
+        """Set a non-blocking timer that fires after `seconds`."""
+        def _fire():
+            import pyautogui, time
+            print(f"\n⏰ TIMER FIRED: {label}")
+            try:
+                from plyer import notification
+                notification.notify(title="⏰ TITAN Timer", message=f"{label} timer is done!", timeout=10)
+            except Exception:
+                pass
+            # Send a system tray beep as fallback
+            import winsound
+            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+
+        if label in self._timers:
+            self._timers[label].cancel()
+
+        t = threading.Timer(seconds, _fire)
+        t.daemon = True
+        t.start()
+        self._timers[label] = t
+
+        mins = seconds // 60
+        secs = seconds % 60
+        if mins > 0:
+            time_str = f"{mins} minute{'s' if mins > 1 else ''}" + (f" {secs} seconds" if secs else "")
+        else:
+            time_str = f"{secs} second{'s' if secs > 1 else ''}"
+        return f"Timer set for {time_str}. I will notify you when it's done!"
 
 
 # Singleton instance

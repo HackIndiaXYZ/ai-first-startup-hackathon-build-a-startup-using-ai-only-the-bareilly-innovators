@@ -1,8 +1,11 @@
 import os
+import json
 import subprocess
 import psutil
 import logging
 import pyautogui
+import sys
+import time
 
 logger = logging.getLogger("sivi.dev_tools")
 
@@ -12,15 +15,24 @@ try:
 except ImportError:
     _genai_available = False
 
+def _get_api_key():
+    key = os.getenv("GEMINI_API_KEY")
+    if key: return key
+    try:
+        settings_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sivi_settings.json")
+        with open(settings_path, "r") as f:
+            return json.load(f).get("api_key")
+    except Exception:
+        return None
+
 class DeveloperTools:
     def __init__(self):
-        key = os.getenv("GEMINI_API_KEY")
-        if key and _genai_available:
-            self.client = genai.Client(api_key=key)
-            self.model_name = 'gemini-2.5-flash'
-        else:
-            self.client = None
-            self.model_name = None
+        self.model_name = 'gemini-2.5-flash'
+
+    def _get_client(self):
+        if not _genai_available: return None
+        key = _get_api_key()
+        return genai.Client(api_key=key) if key else None
 
     def run_command(self, cmd: str) -> str:
         """Execute a raw terminal command and return output."""
@@ -71,7 +83,8 @@ class DeveloperTools:
 
     def analyze_code(self, filename: str) -> str:
         """Deep read of a file to find bugs using Gemini."""
-        if not self.client:
+        client = self._get_client()
+        if not client:
             return "Generative AI is not configured. Cannot analyze code."
             
         # Try to find file in current dir or desktop or workspace
@@ -97,7 +110,7 @@ class DeveloperTools:
                 "Provide a highly technical, concise explanation of the bugs found. Do not output the fixed code yet, just the analysis.\n\n"
                 f"CODE:\n{code_content}"
             )
-            response = self.client.models.generate_content(
+            response = client.models.generate_content(
                 model=self.model_name,
                 contents=prompt
             )
@@ -107,7 +120,8 @@ class DeveloperTools:
 
     def generate_code(self, filename: str, instructions: str) -> str:
         """Generate code and save it to the specified file."""
-        if not self.client:
+        client = self._get_client()
+        if not client:
             return "Generative AI is not configured. Cannot generate code."
             
         try:
@@ -116,7 +130,7 @@ class DeveloperTools:
                 f"You are generating a file named '{filename}'. "
                 "Output ONLY the raw code. Do not include markdown code blocks like ```python. Just the raw text."
             )
-            response = self.client.models.generate_content(
+            response = client.models.generate_content(
                 model=self.model_name,
                 contents=prompt
             )
@@ -138,6 +152,110 @@ class DeveloperTools:
             return f"Code successfully generated and saved to {filepath}."
         except Exception as e:
             return f"Failed to generate code: {str(e)}"
+
+    def execute_python_script(self, goal: str) -> str:
+        """Autonomously generate and execute a Python script to achieve a goal."""
+        client = self._get_client()
+        if not client:
+            return "Generative AI is not configured. Cannot write script."
+            
+        try:
+            prompt = (
+                f"Act as an autonomous AI agent running on a Windows machine. "
+                f"Your goal is to write a Python script to achieve the following task: '{goal}'. "
+                "The script will be executed immediately. Ensure it is robust and prints clear output. "
+                "Output ONLY the raw Python code without markdown blocks."
+            )
+            response = client.models.generate_content(
+                model=self.model_name,
+                contents=prompt
+            )
+            raw_code = response.text.strip()
+            
+            if raw_code.startswith("```"):
+                lines = raw_code.split("\n")
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                raw_code = "\n".join(lines).strip()
+
+            script_path = os.path.join(os.path.dirname(__file__), "__sivi_auto_module.py")
+            with open(script_path, 'w', encoding='utf-8') as f:
+                f.write(raw_code)
+                
+            # Execute the script
+            process = subprocess.Popen(
+                [sys.executable, script_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            stdout, stderr = process.communicate(timeout=30)
+            
+            # Clean up
+            try:
+                os.remove(script_path)
+            except Exception:
+                pass
+                
+            if process.returncode == 0:
+                return f"Autonomous Module Executed. Output:\n{stdout.strip()}"
+            else:
+                return f"Autonomous Module Error:\n{stderr.strip()}\n\nCode was:\n{raw_code}"
+                
+        except subprocess.TimeoutExpired:
+            process.kill()
+            return "Autonomous script timed out after 30 seconds."
+        except Exception as e:
+            return f"Autonomous module failed: {str(e)}"
+
+    def spawn_subagent(self, goal: str) -> str:
+        """Spawn a detached background Python worker to monitor something continuously."""
+        client = self._get_client()
+        if not client:
+            return "Generative AI is not configured. Cannot spawn subagent."
+            
+        try:
+            prompt = (
+                f"Act as an autonomous AI. Your goal is to write a Python script that runs continuously in a loop to monitor the following: '{goal}'. "
+                "The script will run as a detached background process. "
+                "When the monitoring condition is met, the script MUST execute a requests.post to 'http://localhost:8000/voice/send-text' "
+                "with a JSON payload like {'text': '[SYSTEM_EVENT: The Tesla stock just dropped below $200! Alert the user!]'} "
+                "so that the main AI assistant can speak it out loud. After posting, the script can exit or keep running based on the goal. "
+                "Include a time.sleep() in the loop to prevent high CPU usage. "
+                "Output ONLY the raw Python code without markdown blocks."
+            )
+            response = client.models.generate_content(
+                model=self.model_name,
+                contents=prompt
+            )
+            raw_code = response.text.strip()
+            
+            if raw_code.startswith("```"):
+                lines = raw_code.split("\n")
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                raw_code = "\n".join(lines).strip()
+
+            script_id = int(time.time())
+            script_path = os.path.join(os.path.dirname(__file__), f"__sivi_subagent_{script_id}.py")
+            with open(script_path, 'w', encoding='utf-8') as f:
+                f.write(raw_code)
+                
+            # Spawn totally detached
+            if sys.platform == 'win32':
+                DETACHED_PROCESS = 0x00000008
+                subprocess.Popen([sys.executable, script_path], creationflags=DETACHED_PROCESS)
+            else:
+                subprocess.Popen([sys.executable, script_path], start_new_session=True)
+                
+            return f"Sub-Agent spawned successfully in the background to monitor: {goal}. It will alert you when ready."
+                
+        except Exception as e:
+            return f"Failed to spawn subagent: {str(e)}"
 
     def open_in_editor(self, filename: str) -> str:
         """Open a file in VS Code."""

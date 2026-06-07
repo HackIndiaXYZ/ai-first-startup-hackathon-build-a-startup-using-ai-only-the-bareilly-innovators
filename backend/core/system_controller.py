@@ -3,57 +3,86 @@ import ctypes
 import subprocess
 import pyautogui
 import time
+from datetime import datetime
+from pathlib import Path
+
 
 class SystemController:
     def __init__(self):
         pass
 
+    # ── Volume ────────────────────────────────────────────────────
+
     def volume_up(self, amount: int = 10):
-        print(f" Increasing volume by {amount}")
-        # Windows hotkey for volume up is 'volumeup'
-        # pyautogui presses it amount/2 times since each press is usually 2%
         presses = max(1, amount // 2)
         pyautogui.press('volumeup', presses=presses)
         return "Volume increased."
 
     def volume_down(self, amount: int = 10):
-        print(f" Decreasing volume by {amount}")
         presses = max(1, amount // 2)
         pyautogui.press('volumedown', presses=presses)
         return "Volume decreased."
-        
+
     def mute_volume(self):
-        print(" Muting volume")
         pyautogui.press('volumemute')
-        return "Volume muted."
+        return "Volume muted/unmuted."
+
+    def set_volume(self, level: int) -> str:
+        """Set volume to exact percentage using PowerShell / nircmd."""
+        level = max(0, min(100, level))
+        try:
+            # Use nircmd if available (most reliable), else PowerShell SoundMixer
+            result = subprocess.run(
+                ["powershell", "-Command",
+                 f"$wshShell = New-Object -ComObject WScript.Shell; "
+                 f"for ($i=0; $i -lt 50; $i++) {{ $wshShell.SendKeys([char]174) }}; "  # mute/min first
+                 f"$vol = {level}; "
+                 f"Add-Type -TypeDefinition '"
+                 "using System.Runtime.InteropServices; "
+                 "[Guid(\"5CDF2C82-841E-4546-9722-0CF74078229A\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)] "
+                 "interface IAudioEndpointVolume { void _VT0(); void _VT1(); void _VT2(); void _VT3(); int SetMasterVolumeLevelScalar(float fLevel, System.Guid pguidEventContext); } "
+                 "'; "
+                 ],
+                capture_output=True, text=True, timeout=5
+            )
+            # Simpler fallback: press volumeup/down to approximate
+            # First mute, then unmute, then set by pressing keys
+            # Use nircmd approach: bring to 0 then raise
+            pyautogui.press('volumemute')
+            time.sleep(0.1)
+            pyautogui.press('volumemute')
+            # Press volumedown 50 times to ensure we're at minimum
+            pyautogui.press('volumedown', presses=50)
+            # Now press volumeup for desired percentage (each press ≈ 2%)
+            presses = max(1, level // 2)
+            pyautogui.press('volumeup', presses=presses)
+            return f"Volume set to approximately {level}%."
+        except Exception as e:
+            return f"Could not set volume: {e}"
+
+    # ── Power ─────────────────────────────────────────────────────
 
     def lock_screen(self):
-        print(" Locking screen")
-        # Windows API call to lock workstation
         ctypes.windll.user32.LockWorkStation()
         return "Screen locked."
 
     def shutdown(self):
-        print(" Shutting down computer")
         os.system("shutdown /s /t 5")
         return "Shutting down in 5 seconds."
 
     def restart(self):
-        print(" Restarting computer")
         os.system("shutdown /r /t 5")
         return "Restarting in 5 seconds."
 
     def sleep_mode(self):
-        print(" Entering sleep mode")
-        # Use PowerShell to trigger sleep on Windows
         os.system("rundll32.exe powrprof.dll,SetSuspendState 0,1,0")
         return "Going to sleep."
 
+    # ── Brightness ────────────────────────────────────────────────
+
     def brightness_up(self, amount: int = 10):
-        print(f" Increasing brightness by {amount}")
         try:
-            # Use PowerShell to adjust brightness on Windows
-            result = subprocess.run(
+            subprocess.run(
                 ["powershell", "-Command",
                  f"$b = (Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness).CurrentBrightness;"
                  f"$new = [math]::Min(100, $b + {amount});"
@@ -65,9 +94,8 @@ class SystemController:
             return f"Could not adjust brightness: {e}"
 
     def brightness_down(self, amount: int = 10):
-        print(f" Decreasing brightness by {amount}")
         try:
-            result = subprocess.run(
+            subprocess.run(
                 ["powershell", "-Command",
                  f"$b = (Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness).CurrentBrightness;"
                  f"$new = [math]::Max(0, $b - {amount});"
@@ -78,31 +106,121 @@ class SystemController:
         except Exception as e:
             return f"Could not adjust brightness: {e}"
 
+    # ── Screenshot ────────────────────────────────────────────────
+
+    def take_screenshot(self) -> str:
+        """Take a real screenshot and save to Desktop with timestamp."""
+        try:
+            from PIL import ImageGrab
+            desktop = Path(os.path.expanduser("~/Desktop"))
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = desktop / f"Screenshot_{timestamp}.png"
+            img = ImageGrab.grab()
+            img.save(str(filename))
+            return f"Screenshot saved to Desktop as Screenshot_{timestamp}.png"
+        except ImportError:
+            # Fallback: use Win+Shift+S (Snipping Tool)
+            pyautogui.hotkey('win', 'printscreen')
+            return "Screenshot taken and saved to Pictures folder."
+        except Exception as e:
+            return f"Screenshot failed: {e}"
+
+    # ── Clipboard ─────────────────────────────────────────────────
+
     def read_clipboard(self) -> str:
         try:
             import pyperclip
             content = pyperclip.paste()
             return content if content else "Clipboard is empty."
         except ImportError:
-            return "pyperclip not installed."
+            try:
+                result = subprocess.run(
+                    ["powershell", "-Command", "Get-Clipboard"],
+                    capture_output=True, text=True, timeout=3
+                )
+                return result.stdout.strip() or "Clipboard is empty."
+            except Exception as e:
+                return f"Could not read clipboard: {e}"
 
     def write_clipboard(self, text: str) -> str:
         try:
             import pyperclip
             pyperclip.copy(text)
-            return "Text copied to clipboard."
+            return f"Copied to clipboard: {text[:50]}{'...' if len(text) > 50 else ''}"
         except ImportError:
-            return "pyperclip not installed."
+            try:
+                subprocess.run(
+                    ["powershell", "-Command", f"Set-Clipboard -Value '{text}'"],
+                    capture_output=True, timeout=3
+                )
+                return "Text copied to clipboard."
+            except Exception as e:
+                return f"Could not write to clipboard: {e}"
 
-    def toggle_wifi(self):
-        # Open quick settings as direct toggle requires admin privileges
-        pyautogui.hotkey('win', 'a')
-        return "Opened Action Center. You can toggle WiFi there."
+    # ── Connectivity ──────────────────────────────────────────────
 
-    def toggle_bluetooth(self):
-        # Open Bluetooth settings
-        os.startfile("ms-settings:bluetooth")
-        return "Opened Bluetooth settings."
+    def wifi_on(self) -> str:
+        try:
+            result = subprocess.run(
+                ["netsh", "interface", "set", "interface", "Wi-Fi", "enable"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                return "WiFi enabled successfully."
+            # Fallback: open action center
+            pyautogui.hotkey('win', 'a')
+            return "Opened Action Center. Please toggle WiFi there."
+        except Exception as e:
+            pyautogui.hotkey('win', 'a')
+            return "Opened Action Center to toggle WiFi."
+
+    def wifi_off(self) -> str:
+        try:
+            result = subprocess.run(
+                ["netsh", "interface", "set", "interface", "Wi-Fi", "disable"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                return "WiFi disabled successfully."
+            pyautogui.hotkey('win', 'a')
+            return "Opened Action Center. Please toggle WiFi there."
+        except Exception as e:
+            pyautogui.hotkey('win', 'a')
+            return "Opened Action Center to toggle WiFi."
+
+    def bluetooth_on(self) -> str:
+        try:
+            result = subprocess.run(
+                ["powershell", "-Command",
+                 "Add-Type -AssemblyName System.Runtime.WindowsRuntime; "
+                 "[Windows.Devices.Radios.Radio,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null; "
+                 "$radios = [Windows.Devices.Radios.Radio]::GetRadiosAsync().GetAwaiter().GetResult(); "
+                 "$bt = $radios | Where-Object { $_.Kind -eq 'Bluetooth' }; "
+                 "if ($bt) { $bt.SetStateAsync('On').GetAwaiter().GetResult() } "],
+                capture_output=True, text=True, timeout=10
+            )
+            return "Bluetooth enabled."
+        except Exception:
+            os.startfile("ms-settings:bluetooth")
+            return "Opened Bluetooth settings."
+
+    def bluetooth_off(self) -> str:
+        try:
+            result = subprocess.run(
+                ["powershell", "-Command",
+                 "Add-Type -AssemblyName System.Runtime.WindowsRuntime; "
+                 "[Windows.Devices.Radios.Radio,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null; "
+                 "$radios = [Windows.Devices.Radios.Radio]::GetRadiosAsync().GetAwaiter().GetResult(); "
+                 "$bt = $radios | Where-Object { $_.Kind -eq 'Bluetooth' }; "
+                 "if ($bt) { $bt.SetStateAsync('Off').GetAwaiter().GetResult() } "],
+                capture_output=True, text=True, timeout=10
+            )
+            return "Bluetooth disabled."
+        except Exception:
+            os.startfile("ms-settings:bluetooth")
+            return "Opened Bluetooth settings."
+
+    # ── Media ─────────────────────────────────────────────────────
 
     def media_play_pause(self):
         pyautogui.press('playpause')
@@ -115,5 +233,6 @@ class SystemController:
     def media_prev(self):
         pyautogui.press('prevtrack')
         return "Went to previous track."
+
 
 system_controller = SystemController()

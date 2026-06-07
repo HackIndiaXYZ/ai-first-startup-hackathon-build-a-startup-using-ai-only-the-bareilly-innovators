@@ -26,7 +26,7 @@ def _get_api_key():
 
 class ScreenReader:
     def __init__(self):
-        self.model_name = "gemini-1.5-flash"
+        self.model_name = "gemini-2.5-flash"
 
     def _get_client(self):
         if not genai: return None
