@@ -2,9 +2,8 @@ import os
 import time
 import requests
 import psutil
-import win32gui
-import threading
 from dotenv import load_dotenv
+from notification_monitor import notification_monitor
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 BRIDGE_URL = os.getenv("BRIDGE_URL", "http://localhost:8000")
@@ -66,10 +65,19 @@ class BackgroundMonitor:
         except Exception as e:
             print(f"Battery check failed: {e}")
 
+    def check_notifications(self):
+        try:
+            new_alerts = notification_monitor.get_new_notifications()
+            for alert in new_alerts:
+                self._send_to_bridge(f"[SYSTEM_EVENT: {alert}. Proactively inform the user about this notification.]")
+        except Exception as e:
+            print(f"Notification check failed: {e}")
+
     def run(self):
         print("Starting Proactive Background Monitor...")
         while True:
             self.check_battery()
+            self.check_notifications()
             time.sleep(10) # Check every 10 seconds
 
 if __name__ == "__main__":

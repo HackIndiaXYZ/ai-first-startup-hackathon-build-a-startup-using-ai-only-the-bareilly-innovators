@@ -6,7 +6,6 @@ Uses HTTP POST to /voice/send-text to integrate with the running bridge server.
 
 import os
 import sys
-import time
 import threading
 import requests
 import win32gui
@@ -85,31 +84,51 @@ class WakeWordListener:
             return
         self._cooldown = True
 
-        print("\n Wake word detected!")
+        def _handle_wake():
+            print("\n Wake word/Clap detected!")
 
-        # Check if bridge server is running
-        if self._bridge_connected():
-            # Get the currently active window to give Sivi context
-            context = "Wait for their command."
-            try:
-                hwnd = win32gui.GetForegroundWindow()
-                if hwnd:
-                    window_title = win32gui.GetWindowText(hwnd).strip()
-                    if window_title:
-                        context = f"The user is currently looking at: {window_title}. Greet them accordingly and wait for their command."
-            except Exception:
-                pass
+            # 1. Provide an instant, polite local greeting based on time of day
+            from datetime import datetime
+            hour = datetime.now().hour
+            if hour < 12:
+                wish = "Good morning, Sir."
+            elif hour < 18:
+                wish = "Good afternoon, Sir."
+            else:
+                wish = "Good evening, Sir."
+            
+            greeting = f"{wish} I am listening."
 
-            # Bridge is online — send a nudge so Gemini starts listening
-            self._send_to_bridge(f"[WAKE_WORD_ACTIVATED: User just woke you up. {context}]")
-            print(" Bridge is online. Waiting for user to speak into Gemini Live mic.")
-        else:
-            # Bridge offline — fall back to local command handling
-            self._speak_local("Yes? Bridge server is offline, using local mode.")
-            self._listen_local_command()
+            # Check if bridge server is running
+            if self._bridge_connected():
+                # Provide instant local feedback so the user knows to speak
+                self._speak_local(greeting)
 
-        # Reset cooldown after 3 seconds
-        threading.Timer(3.0, self._reset_cooldown).start()
+                # Get the currently active window to give Sivi context
+                context = "The user has been greeted locally. Just listen carefully to their command."
+                try:
+                    hwnd = win32gui.GetForegroundWindow()
+                    if hwnd:
+                        window_title = win32gui.GetWindowText(hwnd).strip()
+                        if window_title:
+                            context = f"The user is looking at: {window_title}. The local system already said '{greeting}'. Just listen to their command and execute it."
+                except Exception:
+                    pass
+
+                # Bridge is online — send a nudge so Gemini starts listening
+                self._send_to_bridge(f"[WAKE_WORD_ACTIVATED: User just woke you up. {context}]")
+                print(" Bridge is online. Waiting for user to speak into Gemini Live mic.")
+            else:
+                # Bridge offline — fall back to local command handling
+                self._speak_local(greeting)
+                self._listen_local_command()
+
+            # Reset cooldown after 3 seconds
+            threading.Timer(3.0, self._reset_cooldown).start()
+
+        # Offload the blocking requests and STT to a background thread 
+        # so the microphone stream loop doesn't get stuck!
+        threading.Thread(target=_handle_wake, daemon=True).start()
 
     def _reset_cooldown(self):
         self._cooldown = False
@@ -123,22 +142,25 @@ class WakeWordListener:
             return
 
         with sr.Microphone() as source:
-            print(" Listening for local command...")
-            self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+            print(" Adjusting for ambient noise... Listening for local command...")
+            # Adjust longer for ambient noise to catch speech properly
+            self.recognizer.adjust_for_ambient_noise(source, duration=1.0)
             try:
-                audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=10)
+                # Increased timeout to 8s and phrase limit to 15s to hear them properly
+                audio = self.recognizer.listen(source, timeout=8, phrase_time_limit=15)
+                print(" Processing audio...")
                 command = self.recognizer.recognize_google(audio)
                 print(f" You said: {command}")
                 response = controller.process_command(command)
                 if response:
                     self._speak_local(response)
             except sr.WaitTimeoutError:
-                self._speak_local("I didn't catch that.")
+                self._speak_local("I didn't hear anything, Sir.")
             except sr.UnknownValueError:
-                self._speak_local("Sorry, I couldn't understand that.")
+                self._speak_local("Sorry, I couldn't understand that clearly.")
             except sr.RequestError as e:
                 print(f" Google STT error: {e}")
-                self._speak_local("Speech service unavailable.")
+                self._speak_local("Speech service unavailable, please check internet.")
             except Exception as e:
                 print(f" Speech recognition error: {e}")
 
@@ -146,7 +168,7 @@ class WakeWordListener:
         bridge_status = "online" if self._bridge_connected() else "OFFLINE (local fallback active)"
         print(f"\n TITAN Wake Word Listener starting...")
         print(f"   Bridge server: {BRIDGE_URL} [{bridge_status}]")
-        print(f"   Listening for wake word...\n")
+        print(f"   Listening for wake word / claps...\n")
 
         self.wake_engine.start_listening(self.on_wake_word_detected)
 

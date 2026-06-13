@@ -6,7 +6,7 @@ logger = logging.getLogger("sivi.memory_vault")
 
 class MemoryVault:
     def __init__(self):
-        self.memory_file = os.path.join(os.path.dirname(__file__), "..", "sivi_memory.json")
+        self.memory_file = os.path.join(os.path.dirname(__file__), "..", "data", "sivi_memory.json")
         self.memories = []
         self.load_memories()
 
@@ -23,6 +23,7 @@ class MemoryVault:
 
     def save_memories(self):
         try:
+            os.makedirs(os.path.dirname(self.memory_file), exist_ok=True)
             with open(self.memory_file, 'w', encoding='utf-8') as f:
                 json.dump(self.memories, f, indent=4)
         except Exception as e:

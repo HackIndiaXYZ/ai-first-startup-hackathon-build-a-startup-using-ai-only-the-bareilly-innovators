@@ -72,9 +72,24 @@ class FileManager:
     def find_file(self, name: str) -> str:
         print(f" Searching for: {name}")
         results = []
+        # Prevent searching inside massive auto-generated folders which causes severe system hang
+        exclude_dirs = {'node_modules', '.git', 'venv', 'env', '__pycache__', 'dist', 'build'}
+        
         for search_dir in [self.desktop, self.documents, self.downloads]:
-            matches = glob.glob(str(search_dir / f"**/*{name}*"), recursive=True)
-            results.extend(matches[:5])  # limit per folder
+            if not search_dir.exists():
+                continue
+            try:
+                for root, dirs, files in os.walk(search_dir):
+                    dirs[:] = [d for d in dirs if d not in exclude_dirs]
+                    for f in files:
+                        if name.lower() in f.lower():
+                            results.append(os.path.join(root, f))
+                            if len(results) >= 5:
+                                break
+                    if len(results) >= 5:
+                        break
+            except Exception:
+                pass
 
         if results:
             found = ", ".join(os.path.basename(r) for r in results[:5])

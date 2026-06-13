@@ -1,5 +1,4 @@
-﻿import sys
-import asyncio
+import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -81,7 +80,6 @@ def test_all():
     # 7. Test Notification Monitor (Async)
     try:
         from notification_monitor import notification_monitor
-        import asyncio
         loop = asyncio.get_event_loop() if asyncio.get_event_loop().is_running() else asyncio.new_event_loop()
         alerts = loop.run_until_complete(notification_monitor._get_new_notifications_async())
         results.append(f"âœ… Notification Monitor: SUCCESS (Found {len(alerts)} alerts)")

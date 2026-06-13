@@ -1,6 +1,5 @@
 import pyautogui
 import subprocess
-import sys
 
 class KeyboardController:
     def __init__(self):

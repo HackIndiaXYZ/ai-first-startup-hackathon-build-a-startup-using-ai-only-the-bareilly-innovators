@@ -7,7 +7,6 @@ SPEAKER OUT: 24000 Hz, Mono, PCM 16-bit <- receive from WebSocket
 CHUNK SIZE:  1024 bytes
 """
 
-import asyncio
 import queue
 import threading
 import logging

@@ -59,7 +59,7 @@ _main_loop: Optional[asyncio.AbstractEventLoop] = None
 # In-memory stores
 command_history: list[dict] = []
 
-CHAT_HISTORY_FILE = os.path.join(os.path.dirname(__file__), "sivi_chat_history.json")
+CHAT_HISTORY_FILE = os.path.join(os.path.dirname(__file__), "data", "sivi_chat_history.json")
 
 def load_chat_history() -> list[dict]:
     if os.path.exists(CHAT_HISTORY_FILE):
@@ -77,6 +77,7 @@ def load_chat_history() -> list[dict]:
 
 def save_chat_history():
     try:
+        os.makedirs(os.path.dirname(CHAT_HISTORY_FILE), exist_ok=True)
         with open(CHAT_HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump(chat_messages, f)
     except Exception as e:
@@ -95,7 +96,7 @@ sivi_state = {
 }
 
 # Settings (loaded from env / SharedPreferences-style JSON)
-SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "sivi_settings.json")
+SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "data", "sivi_settings.json")
 
 
 def load_settings() -> dict:
@@ -124,6 +125,7 @@ def load_settings() -> dict:
 def save_settings(settings: dict):
     """Save settings to file."""
     try:
+        os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
         with open(SETTINGS_FILE, "w") as f:
             json.dump(settings, f, indent=2)
     except Exception as e:
@@ -254,8 +256,14 @@ def on_turn_complete(user_text: str, sivi_text: str):
                     continue
 
                 try:
-                    # Offload blocking execution to a separate thread
-                    result = await asyncio.to_thread(controller.execute_command, cmd)
+                    # Offload blocking execution to a separate thread with a failsafe timeout
+                    try:
+                        result = await asyncio.wait_for(
+                            asyncio.to_thread(controller.execute_command, cmd),
+                            timeout=35.0
+                        )
+                    except asyncio.TimeoutError:
+                        result = "SYSTEM_ERROR: Command execution timed out after 35 seconds."
                     
                     if result:
                         entry = {
@@ -264,6 +272,9 @@ def on_turn_complete(user_text: str, sivi_text: str):
                             "response": result,
                             "timestamp": datetime.now().isoformat()
                         }
+                        command_history.append(entry)
+                        if len(command_history) > 200:
+                            command_history.pop(0)
                         broadcast_sync(entry)
                         
                         dev_commands = ["DEV_RUN_CMD", "DEV_GIT_STATUS", "DEV_KILL_PORT", "DEV_ANALYZE_CODE", "DEV_GENERATE_CODE", "DEV_EXECUTE_SCRIPT", "DEV_SPAWN_SUBAGENT"]
@@ -684,13 +695,15 @@ async def get_system_info():
 @app.post("/command")
 async def execute_command(req: CommandRequest):
     """Execute a text command through jarvis_controller."""
-    response = controller.process_command(req.command)
+    response = await asyncio.to_thread(controller.process_command, req.command)
     entry = {
         "command": req.command,
         "response": response,
         "timestamp": datetime.now().isoformat(),
     }
     command_history.append(entry)
+    if len(command_history) > 200:
+        command_history.pop(0)
     await broadcast({"type": "command", **entry})
     return {"status": "success", "command": req.command, "response": response}
 
@@ -843,6 +856,8 @@ async def websocket_endpoint(ws: WebSocket):
                         "timestamp": datetime.now().isoformat(),
                     }
                     command_history.append(entry)
+                    if len(command_history) > 200:
+                        command_history.pop(0)
                     await ws.send_json({"type": "command_response", **entry})
 
             elif msg_type == "send_text":

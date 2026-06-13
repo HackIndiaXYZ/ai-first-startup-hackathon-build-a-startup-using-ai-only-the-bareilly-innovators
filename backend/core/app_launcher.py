@@ -1,5 +1,4 @@
 import os
-import subprocess
 import re
 import webbrowser
 
@@ -82,7 +81,7 @@ class AppLauncher:
             # It inherently checks the App Paths registry, so things like 'chrome.exe' just work.
             os.startfile(target)
             return f"Opening {app_name}."
-        except (FileNotFoundError, OSError) as e:
+        except (FileNotFoundError, OSError):
             # If startfile fails (e.g., unknown .exe), fallback to Windows Taskbar Search
             try:
                 import pyautogui
@@ -93,7 +92,7 @@ class AppLauncher:
                 time.sleep(0.5)
                 pyautogui.press('enter')
                 return f"Searched and opening {app_name} via Windows Taskbar."
-            except Exception as search_e:
+            except Exception:
                 return f"Could not find or open application '{app_name}' on this system."
 
         except Exception as e:

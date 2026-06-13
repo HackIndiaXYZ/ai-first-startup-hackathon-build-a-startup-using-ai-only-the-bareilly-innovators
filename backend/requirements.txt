@@ -14,9 +14,17 @@ mouse>=0.7.1
 psutil>=5.9.0
 pillow>=10.0.0
 numpy>=1.26.0
-# MYRA Voice Engine
+# Voice / Wake Word
 websockets>=12.0
 sounddevice>=0.4.6
-# Option B - Custom Wake Word selected
 openwakeword>=0.5.1
 pyaudio>=0.2.13
+# Browser Automation
+playwright>=1.40.0
+nest-asyncio>=1.5.8
+# Native Windows UIA
+pywinauto>=0.6.9
+# Utilities
+pyperclip>=1.8.2
+plyer>=2.1.0
+winsdk>=1.0.0b10

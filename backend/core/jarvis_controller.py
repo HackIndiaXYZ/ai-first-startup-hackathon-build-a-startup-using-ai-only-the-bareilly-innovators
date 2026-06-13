@@ -4,7 +4,6 @@ Parses all commands and routes them to the correct module.
 """
 
 import os
-import re
 import sys
 import threading
 
@@ -38,6 +37,13 @@ except Exception as e:
     print(f" camera_vision unavailable: {e}")
 
 try:
+    from browser_controller import browser_controller
+    _browser_available = True
+except Exception as e:
+    _browser_available = False
+    print(f" browser_controller unavailable: {e}")
+
+try:
     from medical import medical_assistant
     _medical_available = True
 except Exception as e:
@@ -56,10 +62,10 @@ except Exception as e:
     _news_available = False
 
 try:
-    from mobile_controller import mobile_controller
-    _mobile_available = True
+    from whatsapp_desktop_controller import whatsapp_desktop_controller
+    _whatsapp_available = True
 except Exception as e:
-    _mobile_available = False
+    _whatsapp_available = False
 
 try:
     from spotify_controller import spotify_controller
@@ -101,7 +107,7 @@ class JarvisController:
             {"name": "Medical AI",          "file": "medical.py",            "status": "active" if _medical_available else "no-key"},
             {"name": "Email",               "file": "jarvis_email.py",       "status": "active" if _email_available else "no-key"},
             {"name": "News",                "file": "gnews.py",              "status": "active" if _news_available else "no-key"},
-            {"name": "Mobile Controller",   "file": "mobile_controller.py",  "status": "active" if _mobile_available else "not-configured"},
+            {"name": "WhatsApp Desktop",    "file": "whatsapp_desktop_controller.py",  "status": "active" if _whatsapp_available else "not-configured"},
             {"name": "Screen Reader",       "file": "screen_reader.py",      "status": "active"},
             {"name": "File Manager",        "file": "file_manager.py",       "status": "active"},
             {"name": "Hindi Voice",         "file": "hindi_voice.py",        "status": "active"},
@@ -113,6 +119,7 @@ class JarvisController:
             {"name": "System Monitor",      "file": "system_monitor.py",     "status": "active"},
             {"name": "Memory Vault",        "file": "memory_vault.py",       "status": "active"},
             {"name": "Developer Tools",     "file": "dev_tools.py",          "status": "active"},
+            {"name": "Browser Controller",  "file": "browser_controller.py", "status": "active" if _browser_available else "not-configured"},
         ]
 
     def process_command(self, text: str) -> str:
@@ -149,18 +156,18 @@ class JarvisController:
             if t == "SWITCH_APP": return window_manager.focus_window(p.get("app_name"))
 
             # ── Browser Tabs ─────────────────────────────────────
-            if t == "TAB_NEW":    return keyboard_controller.press_key("new tab")
-            if t == "TAB_CLOSE":  return keyboard_controller.press_key("close tab")
-            if t == "TAB_NEXT":   return keyboard_controller.press_key("next tab")
-            if t == "TAB_PREV":   return keyboard_controller.press_key("previous tab")
+            if t == "TAB_NEW":    return browser_controller.manage_tabs("new") if _browser_available else keyboard_controller.press_key("new tab")
+            if t == "TAB_CLOSE":  return browser_controller.manage_tabs("close") if _browser_available else keyboard_controller.press_key("close tab")
+            if t == "TAB_NEXT":   return browser_controller.manage_tabs("next") if _browser_available else keyboard_controller.press_key("next tab")
+            if t == "TAB_PREV":   return browser_controller.manage_tabs("prev") if _browser_available else keyboard_controller.press_key("previous tab")
 
             # ── Media / YouTube / Spotify ─────────────────────────
-            if t == "PLAY_YOUTUBE": return app_launcher.play_on_youtube(p.get("query"))
+            if t == "PLAY_YOUTUBE": return browser_controller.play_youtube(p.get("query")) if _browser_available else app_launcher.play_on_youtube(p.get("query"))
             if t == "PLAY_SPOTIFY":
                 return spotify_controller.handle_command("spotify play " + p.get("query", "")) if _spotify_available else "Spotify is not configured."
 
             # ── Search ────────────────────────────────────────────
-            if t == "SEARCH": return app_launcher.google_search(p.get("query"))
+            if t == "SEARCH": return browser_controller.search_google(p.get("query")) if _browser_available else app_launcher.google_search(p.get("query"))
 
             # ── Keyboard ──────────────────────────────────────────
             if t == "TYPE_TEXT": return keyboard_controller.type_text(p.get("text"))
@@ -245,12 +252,29 @@ class JarvisController:
                 return email_manager.send_email(f"{p.get('to')}@gmail.com", "Message from Sivi", p.get("content")) if _email_available else "Email offline."
             if t == "SEND_WHATSAPP":
                 if not p.get("number"): return "Format: 'send message to NUMBER saying TEXT'"
-                return mobile_controller.send_whatsapp_message(p.get("number"), p.get("content")) if _mobile_available else "Mobile offline."
+                return whatsapp_desktop_controller.send_whatsapp_message(p.get("number"), p.get("content")) if _whatsapp_available else "WhatsApp offline."
+            if t == "WHATSAPP_READ_CHAT":
+                return whatsapp_desktop_controller.read_chat(contact=p.get("contact", "")) if _whatsapp_available else "WhatsApp offline."
+            if t == "WHATSAPP_CALL":
+                if not p.get("number"): return "Please specify the contact number to call."
+                return whatsapp_desktop_controller.voice_video_call(p.get("number"), p.get("call_type")) if _whatsapp_available else "WhatsApp offline."
+            if t == "WHATSAPP_SEND_MEDIA":
+                if not p.get("number") or not p.get("filepath"): return "Please specify number and file path."
+                return whatsapp_desktop_controller.send_media(p.get("number"), p.get("filepath")) if _whatsapp_available else "WhatsApp offline."
+            if t == "WHATSAPP_VOICE_NOTE":
+                if not p.get("number"): return "Please specify the contact to send the voice note to."
+                return whatsapp_desktop_controller.record_voice_note(p.get("number")) if _whatsapp_available else "WhatsApp offline."
+
+            # ── Advanced Browser Controls ─────────────────────────
+            if t == "BROWSER_READ_PAGE": return browser_controller.read_current_page() if _browser_available else "Browser offline."
+            if t == "BROWSER_SCROLL":    return browser_controller.scroll(p.get("direction", "down")) if _browser_available else "Browser offline."
+            if t == "BROWSER_FULLSCREEN":return browser_controller.toggle_fullscreen() if _browser_available else "Browser offline."
 
             # ── Files ─────────────────────────────────────────────
             if t == "CREATE_FILE":   return file_manager.create_file(p.get("name"))
             if t == "CREATE_FOLDER": return file_manager.create_folder(p.get("name"))
             if t == "DELETE_FILE":   return file_manager.delete_file(p.get("name"))
+            if t == "DELETE_FOLDER": return file_manager.delete_file(p.get("name"))
             if t == "FIND_FILE":     return file_manager.find_file(p.get("name"))
             if t == "LIST_FILES":    return file_manager.list_files(p.get("folder"))
             if t == "OPEN_FILE":     return file_manager.open_file(p.get("name"))
@@ -292,12 +316,11 @@ class JarvisController:
     def _set_timer(self, seconds: int, label: str) -> str:
         """Set a non-blocking timer that fires after `seconds`."""
         def _fire():
-            import pyautogui, time
             print(f"\n⏰ TIMER FIRED: {label}")
             try:
                 from plyer import notification
                 notification.notify(title="⏰ TITAN Timer", message=f"{label} timer is done!", timeout=10)
-            except Exception:
+            except Exception as e:
                 pass
             # Send a system tray beep as fallback
             import winsound

@@ -13,7 +13,7 @@ def _get_api_key():
     key = os.getenv("GEMINI_API_KEY")
     if key: return key
     try:
-        settings_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sivi_settings.json")
+        settings_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "sivi_settings.json")
         with open(settings_path, "r") as f:
             return json.load(f).get("api_key")
     except Exception:
@@ -48,7 +48,7 @@ class MedicalAssistant:
         """
 
         try:
-            response = self.client.models.generate_content(
+            response = client.models.generate_content(
                 model=self.model_name,
                 contents=prompt
             )

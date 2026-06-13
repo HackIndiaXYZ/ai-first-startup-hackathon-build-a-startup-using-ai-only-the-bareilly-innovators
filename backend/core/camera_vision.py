@@ -17,7 +17,7 @@ def _get_api_key():
     key = os.getenv("GEMINI_API_KEY")
     if key: return key
     try:
-        settings_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sivi_settings.json")
+        settings_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "sivi_settings.json")
         with open(settings_path, "r") as f:
             return json.load(f).get("api_key")
     except Exception:
@@ -32,7 +32,9 @@ class CameraVision:
         key = _get_api_key()
         return genai.Client(api_key=key) if key else None
 
-    def capture_image(self, save_path="snapshot.jpg"):
+    def capture_image(self, save_path=None):
+        if save_path is None:
+            save_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "snapshot.jpg")
         print(" Capturing image from webcam...")
         # Use CAP_DSHOW to prevent hanging if the browser Mediapipe iframe has locked the camera
         cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)

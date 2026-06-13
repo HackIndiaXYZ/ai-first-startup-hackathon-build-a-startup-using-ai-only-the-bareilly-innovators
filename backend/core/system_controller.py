@@ -74,15 +74,20 @@ class SystemController:
         os.system("shutdown /r /t 5")
         return "Restarting in 5 seconds."
 
-    def sleep_mode(self):
-        os.system("rundll32.exe powrprof.dll,SetSuspendState 0,1,0")
-        return "Going to sleep."
+    def sleep_mode(self, delay: int = 5):
+        import threading
+        def _sleep():
+            time.sleep(delay)
+            os.system("rundll32.exe powrprof.dll,SetSuspendState 0,1,0")
+        
+        threading.Thread(target=_sleep, daemon=True).start()
+        return "Okk sir, system sleep mode me ja rha hai."
 
     # ── Brightness ────────────────────────────────────────────────
 
     def brightness_up(self, amount: int = 10):
         try:
-            subprocess.run(
+            result = subprocess.run(
                 ["powershell", "-Command",
                  f"$b = (Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness).CurrentBrightness;"
                  f"$new = [math]::Min(100, $b + {amount});"
@@ -95,7 +100,7 @@ class SystemController:
 
     def brightness_down(self, amount: int = 10):
         try:
-            subprocess.run(
+            result = subprocess.run(
                 ["powershell", "-Command",
                  f"$b = (Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness).CurrentBrightness;"
                  f"$new = [math]::Max(0, $b - {amount});"
@@ -149,7 +154,7 @@ class SystemController:
             return f"Copied to clipboard: {text[:50]}{'...' if len(text) > 50 else ''}"
         except ImportError:
             try:
-                subprocess.run(
+                result = subprocess.run(
                     ["powershell", "-Command", f"Set-Clipboard -Value '{text}'"],
                     capture_output=True, timeout=3
                 )
@@ -200,7 +205,7 @@ class SystemController:
                 capture_output=True, text=True, timeout=10
             )
             return "Bluetooth enabled."
-        except Exception:
+        except Exception as e:
             os.startfile("ms-settings:bluetooth")
             return "Opened Bluetooth settings."
 
@@ -216,7 +221,7 @@ class SystemController:
                 capture_output=True, text=True, timeout=10
             )
             return "Bluetooth disabled."
-        except Exception:
+        except Exception as e:
             os.startfile("ms-settings:bluetooth")
             return "Opened Bluetooth settings."
 

@@ -19,7 +19,7 @@ def _get_api_key():
     key = os.getenv("GEMINI_API_KEY")
     if key: return key
     try:
-        settings_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sivi_settings.json")
+        settings_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "sivi_settings.json")
         with open(settings_path, "r") as f:
             return json.load(f).get("api_key")
     except Exception:
@@ -37,6 +37,14 @@ class DeveloperTools:
     def run_command(self, cmd: str) -> str:
         """Execute a raw terminal command and return output."""
         try:
+            # If the command looks like a server or dev script, spawn it in a new visible window
+            long_running_keywords = ["start", "dev", "serve", "watch", "run", "nodemon"]
+            is_long = any(k in cmd.lower().split() for k in long_running_keywords)
+            
+            if is_long:
+                os.system(f'start cmd.exe /k "{cmd}"')
+                return f"Spawned long-running dev command in new window: {cmd}"
+
             # Using PowerShell for robust execution on Windows
             process = subprocess.Popen(
                 ["powershell", "-Command", cmd],

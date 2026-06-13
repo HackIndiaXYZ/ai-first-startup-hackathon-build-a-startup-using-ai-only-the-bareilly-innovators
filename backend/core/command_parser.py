@@ -62,7 +62,9 @@ SHUTDOWN_KEYWORDS = ["shutdown the computer", "shut down the computer", "band ka
 RESTART_KEYWORDS = ["restart the computer", "reboot the computer", "restart karo",
                     "reboot karo", "computer restart karo"]
 SLEEP_KEYWORDS = ["sleep mode", "put to sleep", "so jao computer",
-                  "sleep karo computer", "computer ko sleep karo"]
+                  "sleep karo computer", "computer ko sleep karo",
+                  "ok bye", "goodbye", "see you later", "alvida", "phir milenge", "good night sivi"]
+# NOTE: bare 'bye', 'tata' removed — too short and cause false positives in long sentences
 BRIGHTNESS_UP_KEYWORDS = ["brightness up", "brightness badhao", "make it brighter",
                            "screen bright karo", "roshan karo", "increase brightness"]
 BRIGHTNESS_DOWN_KEYWORDS = ["brightness down", "brightness kam karo", "make it dimmer",
@@ -73,6 +75,7 @@ TYPE_KEYWORDS = ["type", "likho", "likh do"]
 FILE_CREATE_KEYWORDS = ["create file", "file banao", "naya file"]
 FILE_DELETE_KEYWORDS = ["delete file", "file delete karo", "file hatao"]
 FOLDER_CREATE_KEYWORDS = ["create folder", "folder banao", "naya folder"]
+FOLDER_DELETE_KEYWORDS = ["delete folder", "folder delete karo", "folder hatao"]
 FIND_FILE_KEYWORDS = ["find file", "file dhundho", "file khojo"]
 LIST_FILES_KEYWORDS = ["list files in", "list files"]
 OPEN_FILE_KEYWORDS = ["open file", "file kholo", "open the file"]
@@ -89,7 +92,7 @@ SYSTEM_STATUS_KEYWORDS = ["system status", "pc health", "check system", "system 
                           "time kya ho raha hai", "time kya hai", "battery status", "check battery"]
 WEATHER_KEYWORDS = ["weather in", "weather of", "climate in", "mausam kaisa hai"]
 REMEMBER_KEYWORDS = ["remember", "yaad rakho", "memorize"]
-FORGET_KEYWORDS = ["forget all", "clear memory", "yaad bhool jao", "memory clear karo"]
+FORGET_KEYWORDS = ["forget all", "forget everything", "clear memory", "yaad bhool jao", "memory clear karo"]
 EMOTION_ANALYSIS_KEYWORDS = ["how do i look", "read my face", "check my mood",
                              "mera mood kaisa hai", "analyze my emotion", "meri shakal dekho"]
 DESCRIBE_SCENE_KEYWORDS = ["take photo", "what do you see", "photo khicho", "describe what you see"]
@@ -97,13 +100,25 @@ SWITCH_MODE_KEYWORDS = ["switch mode to", "change mode to", "switch personality 
                         "switch to", "mode badlo", "personality badlo"]
 MINIMIZE_KEYWORDS = ["minimize", "chota karo"]
 MAXIMIZE_KEYWORDS = ["maximize", "bada karo"]
-SNAP_LEFT_KEYWORDS = ["snap to left", "snap left", "window left mein karo"]
-SNAP_RIGHT_KEYWORDS = ["snap to right", "snap right", "window right mein karo"]
+SNAP_LEFT_KEYWORDS = ["snap to left", "snap left", "snap window to left", "window left mein karo"]
+SNAP_RIGHT_KEYWORDS = ["snap to right", "snap right", "snap window to right", "window right mein karo"]
 CALENDAR_KEYWORDS = ["calendar", "schedule", "my events", "today's events", "what's scheduled"]
 MEDICAL_KEYWORDS = ["health", "medical", "headache", "fever", "bukhar", "sir dard",
                     "pet dard", "khansi", "thakan", "cough", "stomach"]
 EMAIL_KEYWORDS = ["send email"]
-WHATSAPP_KEYWORDS = ["send message", "send msg"]
+WHATSAPP_KEYWORDS = ["send message", "send msg", "whatsapp message", "whatsapp karo",
+                     "message bhejo", "message bhej do", "whatsapp pe bhej",
+                     "send whatsapp message", "send a message", "send a whatsapp"]
+WHATSAPP_READ_KEYWORDS = ["read whatsapp", "whatsapp check", "read messages from",
+                          "read latest messages", "read unread msg", "read unread messages",
+                          "naya message padho", "unread message", "read message",
+                          "check messages from", "messages padho", "whatsapp messages"]
+WHATSAPP_CALL_KEYWORDS = ["voice call", "video call", "call on whatsapp",
+                          "whatsapp call", "whatsapp pe call"]
+WHATSAPP_MEDIA_KEYWORDS = ["send document", "send file", "photo bhej", "send attachment",
+                           "file bhej", "document bhej"]
+WHATSAPP_VOICE_NOTE_KEYWORDS = ["send voice note", "voice note", "audio message",
+                                "voice message bhej"]
 PRESS_KEYWORDS = ["press"]
 MOUSE_CLICK_KEYWORDS = ["mouse click", "left click", "right click", "double click"]
 MOUSE_SCROLL_KEYWORDS = ["scroll up", "scroll down"]
@@ -123,6 +138,10 @@ TAB_NEXT_KEYWORDS = ["next tab", "agle tab", "go to next tab"]
 TAB_PREV_KEYWORDS = ["previous tab", "pichle tab", "go to previous tab"]
 TAB_NEW_KEYWORDS = ["new tab", "open tab", "naya tab"]
 TAB_CLOSE_KEYWORDS = ["close tab", "tab band karo"]
+BROWSER_READ_PAGE_KEYWORDS = ["read this page", "read page", "read website", "website padho", "summarize page"]
+BROWSER_FULLSCREEN_KEYWORDS = ["browser full screen", "toggle full screen", "full screen karo", "video full screen", "full screen mode"]
+BROWSER_SCROLL_KEYWORDS = ["scroll page down", "scroll page up", "scroll to top", "scroll to bottom"]
+
 
 # ── Cached compiled patterns ──────────────────────────────────────
 
@@ -149,7 +168,7 @@ def parse_command(text: str) -> "PCCommand | None":
         "WIFI_ON", "WIFI_OFF", "BLUETOOTH_ON", "BLUETOOTH_OFF", "MEDIA_PLAY_PAUSE",
         "MEDIA_NEXT", "MEDIA_PREV", "READ_CLIPBOARD", "NEWS", "SYSTEM_STATUS",
         "READ_WINDOWS", "FORGET_ALL", "ANALYZE_EMOTION", "DESCRIBE_SCENE", "DEV_GIT_STATUS",
-        "TAB_NEXT", "TAB_PREV", "TAB_NEW", "TAB_CLOSE"
+        "TAB_NEXT", "TAB_PREV", "TAB_NEW", "TAB_CLOSE", "BROWSER_READ_PAGE", "BROWSER_FULLSCREEN"
     }
     if text_upper in VALID_NO_PARAM_TYPES:
         return PCCommand(type=text_upper)
@@ -159,6 +178,14 @@ def parse_command(text: str) -> "PCCommand | None":
     while text_lower and text_lower[-1] in string.punctuation:
         text_lower = text_lower[:-1]
     text_lower = text_lower.strip()
+
+    # ── Strip Wake Words / Assistant Names ────────────────────────
+    wake_words_to_strip = ["sivi", "hey sivi", "jarvis", "hey jarvis", "titan", "hey titan", "hey"]
+    for name in wake_words_to_strip:
+        if text_lower.startswith(name + " "):
+            text_lower = text_lower[len(name):].strip()
+        elif text_lower == name:
+            text_lower = ""
 
     # ── WiFi / Bluetooth (MUST be before generic open/close) ──────
     if re.search(r'\bwifi\b|\bwi-fi\b|\bwireless\b|\binternet\b', text_lower):
@@ -192,20 +219,27 @@ def parse_command(text: str) -> "PCCommand | None":
                 label = rest.split(t_match.group(0))[-1].strip() or "Timer"
                 return PCCommand(type="SET_TIMER", params={"seconds": seconds, "label": label})
 
+    # ── Open App (MUST be before Open File to avoid "open file explorer" collision) ──
+    # Skip if the text matches a developer command (e.g. "run command git status")
+    _dev_prefixes = DEV_CMD_KEYWORDS + DEV_EXECUTE_SCRIPT_KEYWORDS + DEV_SPAWN_SUBAGENT_KEYWORDS
+    _is_dev_cmd = any(text_lower.startswith(dp) for dp in _dev_prefixes)
+    if not _is_dev_cmd:
+        for kw in OPEN_KEYWORDS:
+            if text_lower.startswith(kw + " "):
+                app_name = text_lower[len(kw):].strip()
+                if app_name:
+                    # Check if it's an explicit file open request like "open file X"
+                    if app_name.startswith("file ") and app_name != "file explorer":
+                        break  # Let OPEN_FILE handle it below
+                    resolved = APP_ALIASES.get(app_name, app_name)
+                    return PCCommand(type="OPEN_APP", params={"app_name": resolved, "raw": app_name})
+
     # ── Open File ─────────────────────────────────────────────────
     for kw in OPEN_FILE_KEYWORDS:
         if kw in text_lower:
             name = text_lower.replace(kw, "").strip()
             if name:
                 return PCCommand(type="OPEN_FILE", params={"name": name})
-
-    # ── Open App ──────────────────────────────────────────────────
-    for kw in OPEN_KEYWORDS:
-        if text_lower.startswith(kw + " "):
-            app_name = text_lower[len(kw):].strip()
-            if app_name:
-                resolved = APP_ALIASES.get(app_name, app_name)
-                return PCCommand(type="OPEN_APP", params={"app_name": resolved, "raw": app_name})
 
     # ── Shutdown / Restart / Sleep ────────────────────────────────
     if _exact_phrase(text_lower, SHUTDOWN_KEYWORDS):
@@ -221,6 +255,18 @@ def parse_command(text: str) -> "PCCommand | None":
     if _exact_phrase(text_lower, TAB_NEW_KEYWORDS):  return PCCommand(type="TAB_NEW")
     if _exact_phrase(text_lower, TAB_CLOSE_KEYWORDS):return PCCommand(type="TAB_CLOSE")
 
+    # ── Advanced Browser Control ──────────────────────────────────
+    if _exact_phrase(text_lower, BROWSER_READ_PAGE_KEYWORDS): return PCCommand(type="BROWSER_READ_PAGE")
+    if _exact_phrase(text_lower, BROWSER_FULLSCREEN_KEYWORDS): return PCCommand(type="BROWSER_FULLSCREEN")
+    
+    for kw in BROWSER_SCROLL_KEYWORDS:
+        if kw in text_lower:
+            if "up" in text_lower: d = "up"
+            elif "top" in text_lower: d = "top"
+            elif "bottom" in text_lower: d = "bottom"
+            else: d = "down"
+            return PCCommand(type="BROWSER_SCROLL", params={"direction": d})
+
     # ── Close App ─────────────────────────────────────────────────
     for kw in CLOSE_KEYWORDS:
         if text_lower.startswith(kw + " ") or text_lower == kw:
@@ -232,7 +278,9 @@ def parse_command(text: str) -> "PCCommand | None":
     for kw in SWITCH_APP_KEYWORDS:
         if text_lower.startswith(kw + " "):
             app_name = text_lower[len(kw):].strip()
-            if app_name and app_name not in ["professional", "assistant", "gf", "developer"]: # Avoid collision with mode switch
+            # Avoid collision: 'switch to professional/gf/dev' goes to personality; 'go to next/prev tab' goes to tab
+            if app_name and app_name not in ["professional", "assistant", "gf", "developer"] \
+                    and "tab" not in app_name:
                 return PCCommand(type="SWITCH_APP", params={"app_name": app_name})
 
     # ── Volume ────────────────────────────────────────────────────
@@ -347,6 +395,12 @@ def parse_command(text: str) -> "PCCommand | None":
             if name:
                 return PCCommand(type="CREATE_FOLDER", params={"name": name})
 
+    for kw in FOLDER_DELETE_KEYWORDS:
+        if kw in text_lower:
+            name = text_lower.replace(kw, "").strip()
+            if name:
+                return PCCommand(type="DELETE_FOLDER", params={"name": name})
+
     for kw in FIND_FILE_KEYWORDS:
         if kw in text_lower:
             name = text_lower.replace(kw, "").strip()
@@ -382,7 +436,7 @@ def parse_command(text: str) -> "PCCommand | None":
     for kw in WEATHER_KEYWORDS:
         if kw in text_lower:
             # Extract location
-            loc = text_lower.replace(kw, "").strip()
+            loc = text_lower.split(kw, 1)[-1].strip()
             if not loc:
                 loc = "Delhi" # default if unspecified
             return PCCommand(type="GET_WEATHER", params={"location": loc})
@@ -451,19 +505,95 @@ def parse_command(text: str) -> "PCCommand | None":
 
     # ── Email ─────────────────────────────────────────────────────
     for kw in EMAIL_KEYWORDS:
-        if text_lower.startswith(kw):
-            parts = text_lower.split("saying")
-            to = parts[0].replace(kw + " to", "").replace(kw, "").strip()
-            content = parts[1].strip() if len(parts) > 1 else ""
+        if text_lower.startswith(kw + " ") or text_lower == kw:
+            rest = text_lower[len(kw):].strip()
+            if rest.startswith("to "): rest = rest[3:].strip()
+            to = rest
+            content = ""
+            for sep in [" saying ", " ki ", " that ", " message ", " ko ", " bol do ", " likh do "]:
+                if sep in rest:
+                    parts = rest.split(sep, 1)
+                    to = parts[0].strip()
+                    content = parts[1].strip()
+                    break
+            if not content and " " in rest:
+                parts = rest.split(" ", 1)
+                to = parts[0].strip()
+                content = parts[1].strip()
             return PCCommand(type="SEND_EMAIL", params={"to": to, "content": content})
 
     # ── WhatsApp ──────────────────────────────────────────────────
     for kw in WHATSAPP_KEYWORDS:
-        if text_lower.startswith(kw):
-            parts = text_lower.split("saying")
-            number = parts[0].replace(kw + " to", "").replace(kw, "").strip()
-            content = parts[1].strip() if len(parts) > 1 else ""
+        if text_lower.startswith(kw + " ") or text_lower == kw:
+            rest = text_lower[len(kw):].strip()
+            if rest.startswith("to "):
+                rest = rest[3:].strip()
+            
+            number = rest
+            content = ""
+            # Priority order: explicit message separators first, then Hindi postpositions
+            for sep in [" saying ", " that ", " ki ", " bolke ", " bata ", " bol do ", " likh do ", " message "]:
+                if sep in rest:
+                    parts = rest.split(sep, 1)
+                    number = parts[0].strip()
+                    content = parts[1].strip()
+                    break
+            
+            # Secondary: try ' ko ' as Hindi separator ("Rahul ko hello" → name=Rahul, msg=hello)
+            if not content and " ko " in rest:
+                parts = rest.split(" ko ", 1)
+                number = parts[0].strip()
+                content = parts[1].strip()
+
+            if not content and " " in rest:
+                parts = rest.split(" ", 1)
+                number = parts[0].strip()
+                content = parts[1].strip()
+
+            # Strip trailing Hindi postposition 'ko' from contact name
+            # e.g. "mom ko" → "mom", "rahul ko" → "rahul"
+            if number.endswith(" ko"):
+                number = number[:-3].strip()
+                
             return PCCommand(type="SEND_WHATSAPP", params={"number": number, "content": content})
+
+    for kw in WHATSAPP_READ_KEYWORDS:
+        if kw in text_lower:
+            # Extract contact name: "read messages from Rahul" → contact="Rahul"
+            contact = ""
+            for prefix in ["read messages from ", "check messages from ", "read whatsapp from "]:
+                if prefix in text_lower:
+                    contact = text_lower.split(prefix, 1)[-1].strip()
+                    break
+            return PCCommand(type="WHATSAPP_READ_CHAT", params={"contact": contact})
+
+    for kw in WHATSAPP_CALL_KEYWORDS:
+        if kw in text_lower:
+            rest = text_lower.replace(kw, "").strip()
+            if rest.startswith("to "): rest = rest[3:].strip()
+            if rest.endswith(" on whatsapp"): rest = rest.replace(" on whatsapp", "").strip()
+            call_type = "Video call" if "video" in text_lower else "Voice call"
+            return PCCommand(type="WHATSAPP_CALL", params={"number": rest, "call_type": call_type})
+
+    for kw in WHATSAPP_MEDIA_KEYWORDS:
+        if kw in text_lower:
+            rest = text_lower.replace(kw, "").strip()
+            number = ""
+            filepath = ""
+            if " to " in rest:
+                parts = rest.split(" to ", 1)
+                filepath = parts[0].strip()
+                number = parts[1].strip()
+            else:
+                # fallback
+                number = rest
+            return PCCommand(type="WHATSAPP_SEND_MEDIA", params={"number": number, "filepath": filepath})
+
+    for kw in WHATSAPP_VOICE_NOTE_KEYWORDS:
+        if kw in text_lower:
+            rest = text_lower.replace(kw, "").strip()
+            if rest.startswith("to "): rest = rest[3:].strip()
+            return PCCommand(type="WHATSAPP_VOICE_NOTE", params={"number": rest})
 
     # ── Developer Commands ────────────────────────────────────────
     for kw in DEV_CMD_KEYWORDS:

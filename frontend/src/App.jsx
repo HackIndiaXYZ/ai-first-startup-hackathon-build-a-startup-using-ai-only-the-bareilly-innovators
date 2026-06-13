@@ -249,11 +249,21 @@ export default function App() {
 
   /* ── Pages ── */
   const renderHome = () => {
-    // Current time formatting
+    // Current time formatting (Indian Standard Time)
     const now = currentTime;
-    const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const dateString = now.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
-    const dayString = now.toLocaleDateString('en-GB', { weekday: 'long' });
+    
+    // Get hour in IST (0-23) robustly
+    const istTime = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const hour = istTime.getHours();
+
+    let greeting = 'GOOD MORNING';
+    if (hour >= 12 && hour < 17) greeting = 'GOOD AFTERNOON';
+    else if (hour >= 17 && hour < 21) greeting = 'GOOD EVENING';
+    else if (hour >= 21 || hour < 4) greeting = 'GOOD NIGHT';
+    
+    const timeString = now.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true }).toUpperCase();
+    const dateString = now.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'long', year: 'numeric' });
+    const dayString = now.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long' });
 
     // Battery & CPU from sysInfo
     const battery = sysInfo?.battery_percent >= 0 ? sysInfo.battery_percent : 100;
@@ -450,7 +460,7 @@ export default function App() {
             </div>
             <div>
               <div style={{ color: isConnected ? '#fca5a5' : '#e2e8f0', fontSize: '14px', fontWeight: 700 }}>
-                {isConnected ? '"STOP SESSION"' : '"GOOD MORNING, SIVI"'}
+                {isConnected ? '"STOP SESSION"' : `"${greeting}, SIVI"`}
               </div>
               <div style={{ color: '#94a3b8', fontSize: '11px' }}>
                 {isConnected ? 'Tap to disconnect.' : 'Tap to Start'}
