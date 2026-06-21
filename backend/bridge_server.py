@@ -44,6 +44,7 @@ from core.audio_engine import AudioEngine
 from core.command_parser import parse_command
 from core.personality import build_system_prompt, get_greeting, get_personality_list, PERSONALITIES
 from core.jarvis_controller import controller
+from core.self_learning import self_learning
 
 # ══════════════════════════════════════════════════════════════════
 # GLOBAL STATE
@@ -104,7 +105,7 @@ def load_settings() -> dict:
     defaults = {
         "api_key": os.getenv("GEMINI_API_KEY", ""),
         "user_name": os.getenv("USER_NAME", "Rao Alok Yadav"),
-        "personality_mode": os.getenv("AI_MODE", "gf"),
+        "personality_mode": os.getenv("AI_MODE", "sivi"),
         "gemini_model": "native_audio",
         "gemini_voice": "Aoede",
         "temperature": 0.7,
@@ -189,6 +190,10 @@ def on_audio_received(pcm_bytes: bytes):
 def on_input_transcript(text: str):
     """User speech transcription fragment."""
     broadcast_sync({"type": "input_transcript", "text": text})
+    # Smart Barge-in: If the user speaks actual words while Sivi is talking, interrupt instantly!
+    if text.strip() and audio_engine and audio_engine.is_speaking:
+        logger.info(f"User interrupted Sivi with: '{text}'. Clearing playback queue.")
+        audio_engine.clear_playback_queue()
 
 
 def on_output_transcript(text: str):
@@ -229,7 +234,28 @@ def on_turn_complete(user_text: str, sivi_text: str):
         
     save_chat_history()
 
-    # Execute the extracted commands sequentially
+    # ── Self-Learning: Detect user corrections ──────────────────
+    if user_text:
+        user_lower = user_text.lower().strip()
+        correction_patterns = [
+            "that's wrong", "thats wrong", "no no", "galat", "nahi",
+            "not what i asked", "wrong", "i said", "i meant", "not that",
+            "are you deaf", "listen properly", "galat kiya", "ye nahi",
+            "kuch aur", "doosra", "fix this", "fix it", "that was wrong",
+            "you messed up", "not correct", "incorrect", "idiot",
+            "pagal", "bewakoof", "not like that", "aise nahi",
+        ]
+        if any(pat in user_lower for pat in correction_patterns):
+            # The last Sivi message is what was wrong
+            last_sivi = ""
+            for msg in reversed(chat_messages):
+                if not msg.get("is_user") and msg.get("text"):
+                    last_sivi = msg["text"]
+                    break
+            correction_context = f"User said '{user_text}' to correct Sivi. Sivi's last response was: '{last_sivi[:100]}'"
+            self_learning.log_user_correction(user_text, correction_context)
+            logger.info(f"[SelfLearn] User correction detected: {user_text[:60]}")
+
     if extracted_cmds:
         async def _execute_and_feedback():
             all_feedback = []
@@ -239,24 +265,26 @@ def on_turn_complete(user_text: str, sivi_text: str):
                 cmd = parse_command(extracted_cmd)
                 if not cmd:
                     logger.warning(f"Failed to parse AI command tag: {extracted_cmd}")
+                    # Log to self-learning engine
+                    self_learning.log_error(
+                        user_text=user_text,
+                        cmd_tag=extracted_cmd,
+                        cmd_type="PARSE_FAIL",
+                        error_msg=f"The command tag `[CMD: {extracted_cmd}]` was not recognized by the parser.",
+                    )
                     all_feedback.append(f"SYSTEM_ERROR: The command tag `[CMD: {extracted_cmd}]` was not recognized.")
                     has_error = True
                     continue
                     
                 logger.info(f"Parsed command from tag: {cmd.type} -> {cmd.params}")
                 
-                if cmd.type == "SWITCH_MODE":
-                    mode = cmd.params.get("mode", "gf")
-                    settings["personality_mode"] = mode
-                    save_settings(settings)
-                    broadcast_sync({"type": "settings_updated", "settings": settings})
-                    all_feedback.append(f"System: Personality switched to {mode}.")
-                    # Allow switch to happen after other commands finish
-                    asyncio.run_coroutine_threadsafe(asyncio.sleep(2), _main_loop)
-                    continue
-
                 try:
                     # Offload blocking execution to a separate thread with a failsafe timeout
+                    result = None
+                    error_occurred = False
+                    error_msg = ""
+                    stack = ""
+                    
                     try:
                         result = await asyncio.wait_for(
                             asyncio.to_thread(controller.execute_command, cmd),
@@ -264,8 +292,72 @@ def on_turn_complete(user_text: str, sivi_text: str):
                         )
                     except asyncio.TimeoutError:
                         result = "SYSTEM_ERROR: Command execution timed out after 35 seconds."
+                        error_occurred = True
+                        error_msg = result
+                    except Exception as exc:
+                        import traceback as tb
+                        stack = tb.format_exc()
+                        result = f"SYSTEM_ERROR: {exc}"
+                        error_occurred = True
+                        error_msg = str(exc)
                     
+                    # Check if the result itself is an error
+                    if isinstance(result, str) and result.startswith("SYSTEM_ERROR:"):
+                        error_occurred = True
+                        error_msg = result
+                    
+                    # ── Self-Learning: Log errors & attempt auto-retry ──
+                    if error_occurred:
+                        journal_entry = self_learning.log_error(
+                            user_text=user_text,
+                            cmd_tag=extracted_cmd,
+                            cmd_type=cmd.type,
+                            error_msg=error_msg,
+                            stack_trace=stack,
+                        )
+                        category = journal_entry.get("category", "CRASH")
+                        
+                        # Auto-retry for transient errors (timeout, network)
+                        if self_learning.should_auto_retry(category, cmd.type):
+                            logger.info(f"[SelfLearn] Auto-retrying {cmd.type} after {category}...")
+                            try:
+                                retry_result = await asyncio.wait_for(
+                                    asyncio.to_thread(controller.execute_command, cmd),
+                                    timeout=35.0
+                                )
+                                if retry_result and not str(retry_result).startswith("SYSTEM_ERROR:"):
+                                    # Retry succeeded!
+                                    result = retry_result
+                                    error_occurred = False
+                                    self_learning.mark_resolved(cmd.type, "auto_retry_success")
+                                    self_learning.add_lesson(
+                                        source="auto_retry_success",
+                                        lesson=f"{cmd.type} failed with {category} but succeeded on retry. This is a transient error.",
+                                        cmd_type=cmd.type,
+                                        severity="low",
+                                    )
+                                    logger.info(f"[SelfLearn] Auto-retry SUCCEEDED for {cmd.type}")
+                            except Exception:
+                                pass  # Retry also failed, proceed with self-diagnosis
+                        
+                        # If still failed, trigger self-diagnosis
+                        if error_occurred:
+                            diagnosis_prompt = self_learning.build_diagnosis_prompt(
+                                cmd_tag=extracted_cmd,
+                                cmd_type=cmd.type,
+                                error_msg=error_msg,
+                            )
+                            all_feedback.append(diagnosis_prompt)
+                            has_error = True
+                            
+                            # Don't add the raw error separately — diagnosis includes it
+                            continue
+                    
+                    # ── Success path: normal feedback ──
                     if result:
+                        # Mark any previous errors for this cmd_type as resolved
+                        self_learning.mark_resolved(cmd.type, "success_on_reattempt")
+                        
                         entry = {
                             "type": "command",
                             "command": extracted_cmd,
@@ -288,14 +380,11 @@ def on_turn_complete(user_text: str, sivi_text: str):
                             "MINIMIZE_WINDOW", "MAXIMIZE_WINDOW", "SNAP_LEFT", "SNAP_RIGHT",
                             "TAB_NEXT", "TAB_PREV", "TAB_NEW", "TAB_CLOSE",
                             "WIFI_ON", "WIFI_OFF", "BLUETOOTH_ON", "BLUETOOTH_OFF",
-                            "REMEMBER", "FORGET_ALL", "SEND_EMAIL", "SEND_WHATSAPP",
+                            "REMEMBER", "FORGET_ALL", "SEND_EMAIL", "SEND_WHATSAPP", "WHATSAPP_READ_CHAT",
                             "PLAY_YOUTUBE", "PLAY_SPOTIFY",
                         ]
                         
-                        if isinstance(result, str) and result.startswith("SYSTEM_ERROR:"):
-                            all_feedback.append(f"CRITICAL ERROR on {cmd.type}: {result}")
-                            has_error = True
-                        elif cmd.type in speak_commands or cmd.type in dev_commands:
+                        if cmd.type in speak_commands or cmd.type in dev_commands:
                             if cmd.type == "ANALYZE_EMOTION":
                                 all_feedback.append(f"Visual analysis result: '{result}'. Deeply analyze their state in your persona.")
                             elif cmd.type == "DESCRIBE_SCENE":
@@ -310,15 +399,23 @@ def on_turn_complete(user_text: str, sivi_text: str):
                                 all_feedback.append(f"{cmd.type} result: {result}")
                                 
                 except Exception as e:
+                    import traceback as tb
                     logger.error(f"Command execution error: {e}")
+                    self_learning.log_error(
+                        user_text=user_text,
+                        cmd_tag=extracted_cmd,
+                        cmd_type=cmd.type if cmd else "UNKNOWN",
+                        error_msg=str(e),
+                        stack_trace=tb.format_exc(),
+                    )
                     all_feedback.append(f"ERROR executing {cmd.type}: {e}")
                     has_error = True
 
             # Send single batched feedback back to Gemini
             if all_feedback and gemini_client and gemini_client.is_connected:
-                final_prompt = "System Actions Results:\n- " + "\n- ".join(all_feedback) + "\nPlease convey this sequentially or concisely to the user naturally."
+                final_prompt = "System Actions Results:\n- " + "\n- ".join(all_feedback) + "\nConvey results concisely to the user."
                 if has_error:
-                    final_prompt += "\nSome commands failed. Please apologize and explain the failures."
+                    final_prompt += "\nSome commands failed. Think about WHY and explain concisely. If you can fix it with a different [CMD: ...] tag, do it now."
                 await gemini_client.send_text(final_prompt)
 
         if _main_loop:
@@ -388,7 +485,7 @@ async def start_voice_session(is_switch: bool = False):
 
     voice = settings.get("gemini_voice", "Aoede")
     user_name = settings.get("user_name", "Rao Alok Yadav")
-    personality = settings.get("personality_mode", "gf")
+    personality = settings.get("personality_mode", "sivi")
     system_prompt = build_system_prompt(user_name, personality)
 
     # Inject recent command history for self-learning / context memory
@@ -456,52 +553,61 @@ async def start_voice_session(is_switch: bool = False):
 
 async def _send_greeting_delayed(greeting: str, is_switch: bool = False):
     """Send greeting after a short delay to let audio settle."""
-    await asyncio.sleep(0.8)
+    await asyncio.sleep(0.3)
     
-    # Desktop Notification
-    try:
-        from plyer import notification
-        await asyncio.to_thread(
-            notification.notify,
-            title="Sivi AI",
-            message="Sivi is now online and listening to you.",
-            app_name="Sivi",
-            timeout=3
-        )
-    except Exception as e:
-        logger.error(f"Notification error: {e}")
+    # Desktop Notification (fire-and-forget, don't block greeting)
+    async def _notify():
+        try:
+            from plyer import notification
+            await asyncio.to_thread(
+                notification.notify,
+                title="Sivi AI",
+                message="Sivi is now online and listening to you.",
+                app_name="Sivi",
+                timeout=3
+            )
+        except Exception as e:
+            logger.error(f"Notification error: {e}")
+    asyncio.create_task(_notify())
 
     if gemini_client and gemini_client.is_connected:
         if is_switch:
-            # Skip heavy startup context loading when just hot-swapping personality
             await gemini_client.send_text(greeting)
             sivi_state["orb_state"] = "thinking"
             sivi_state["status_text"] = "Soch rahi hoon..."
             await broadcast({"type": "state", **sivi_state})
             return
 
-        # Inject Camera & Screen Context automatically on startup
-        try:
-            from core.camera_vision import camera_vision
-            from core.screen_reader import screen_reader
-            
-            logger.info("Gathering startup context (Vision & Screen)...")
-            sivi_state["status_text"] = "Looking at you..."
-            broadcast_sync({"type": "state", **sivi_state})
-            
-            # Run in thread so we don't block the async loop
-            emotion_ctx = await asyncio.to_thread(camera_vision.analyze_emotion)
-            screen_ctx = await asyncio.to_thread(screen_reader.read_screen, "Summarize what's on the screen briefly in 1 sentence.")
-            
-            context_msg = f"\n\n[STARTUP CONTEXT: I just looked at the user through the webcam and saw: '{emotion_ctx}'. I also looked at their PC screen and saw: '{screen_ctx}'. Tailor your greeting to comment on their mood and what they are currently doing on the PC!]"
-            greeting += context_msg
-        except Exception as e:
-            logger.error(f"Startup context error: {e}")
-
-        await gemini_client.send_text(greeting)
+        # Send greeting IMMEDIATELY — don't wait for camera/screen
+        greeting_prompt = f"System: The system has just booted up. Greet the user out loud immediately and concisely. Your name is Sivi. Use this baseline greeting style: '{greeting}'. Keep it very short, 1 sentence max."
+        await gemini_client.send_text(greeting_prompt)
         sivi_state["orb_state"] = "thinking"
         sivi_state["status_text"] = "Soch rahi hoon..."
         await broadcast({"type": "state", **sivi_state})
+
+        # Gather camera/screen context in background and send as a follow-up
+        async def _gather_context():
+            try:
+                from core.camera_vision import camera_vision
+                from core.screen_reader import screen_reader
+                
+                logger.info("Gathering startup context in background...")
+                emotion_ctx = await asyncio.to_thread(camera_vision.analyze_emotion)
+                screen_ctx = await asyncio.to_thread(screen_reader.read_screen, "Summarize what's on the screen briefly in 1 sentence.")
+                
+                ctx_strings = []
+                if emotion_ctx and "error" not in emotion_ctx.lower():
+                    ctx_strings.append(f"User's current mood from webcam: '{emotion_ctx}'.")
+                if screen_ctx and "error" not in screen_ctx.lower():
+                    ctx_strings.append(f"User's screen shows: '{screen_ctx}'.")
+                
+                if ctx_strings and gemini_client and gemini_client.is_connected:
+                    ctx_msg = f"[BACKGROUND CONTEXT UPDATE: {' '.join(ctx_strings)} Use this context silently to inform future responses. Do NOT speak about this unless the user asks.]"
+                    await gemini_client.send_text(ctx_msg)
+            except Exception as e:
+                logger.error(f"Background context error: {e}")
+        
+        asyncio.create_task(_gather_context())
 
 
 async def stop_voice_session():
@@ -819,6 +925,19 @@ async def get_modules():
     return {"modules": controller.get_module_status()}
 
 
+@app.get("/learning")
+async def get_learning_stats():
+    """Return self-learning engine stats, recent errors, and lessons."""
+    stats = self_learning.get_stats()
+    recent_errors = self_learning.error_journal[-20:]  # Last 20 errors
+    lessons = self_learning.lessons
+    return {
+        "stats": stats,
+        "recent_errors": recent_errors,
+        "lessons": lessons,
+    }
+
+
 # ── WebSocket Endpoint ────────────────────────────────────────────
 
 @app.websocket("/ws")
@@ -901,4 +1020,4 @@ else:
 # ══════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    uvicorn.run("bridge_server:app", host="127.0.0.1", port=8000, reload=False)
+    uvicorn.run("bridge_server:app", host="0.0.0.0", port=8000, reload=False)

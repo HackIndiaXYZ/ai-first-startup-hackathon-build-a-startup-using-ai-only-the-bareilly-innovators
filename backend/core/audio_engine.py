@@ -44,7 +44,7 @@ CHUNK_SIZE = 4096
 DTYPE = np.int16
 
 # How long silence must persist before we consider speaking done (seconds)
-SPEAKING_SILENCE_THRESHOLD = 0.45
+SPEAKING_SILENCE_THRESHOLD = 0.2
 
 
 class AudioEngine:
@@ -137,13 +137,13 @@ class AudioEngine:
                     if self.on_amplitude_changed:
                         self.on_amplitude_changed(rms)
 
-                    # Echo suppression: don't send mic when Sivi is speaking
-                    # Use a small hysteresis — only suppress when clearly speaking
-                    if not self._muted and not self._speaking:
+                    # Echo suppression & Smart Barge-in
+                    if not self._muted:
                         if self.on_audio_chunk:
-                            # Soft Noise Gate: Send pure mathematical silence if below static threshold
-                            # This prevents Gemini from hallucinating words from background fan noise
-                            if rms < 0.006:  # Raised threshold: prevents fan noise but catches quiet voices
+                            # Echo suppression: If Sivi is speaking, raise threshold to 0.05 to block speaker noise.
+                            # Otherwise use 0.002 to catch quiet user speech.
+                            threshold = 0.05 if self._speaking else 0.002
+                            if rms < threshold:
                                 self.on_audio_chunk(b'\x00' * len(pcm_bytes))
                             else:
                                 self.on_audio_chunk(pcm_bytes)
@@ -175,10 +175,10 @@ class AudioEngine:
                 if self.on_amplitude_changed:
                     self.on_amplitude_changed(rms)
 
-                if not self._muted and not self._speaking:
+                if not self._muted:
                     if self.on_audio_chunk:
-                        # Soft Noise Gate: Send pure mathematical silence if below static threshold
-                        if rms < 0.003:
+                        threshold = 0.05 if self._speaking else 0.002
+                        if rms < threshold:
                             self.on_audio_chunk(b'\x00' * len(pcm_bytes))
                         else:
                             self.on_audio_chunk(pcm_bytes)

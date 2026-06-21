@@ -27,7 +27,7 @@ def _get_api_key():
 
 class DeveloperTools:
     def __init__(self):
-        self.model_name = 'gemini-2.5-flash'
+        self.model_name = 'gemini-flash-latest'
 
     def _get_client(self):
         if not _genai_available: return None
@@ -42,16 +42,29 @@ class DeveloperTools:
             is_long = any(k in cmd.lower().split() for k in long_running_keywords)
             
             if is_long:
-                os.system(f'start cmd.exe /k "{cmd}"')
-                return f"Spawned long-running dev command in new window: {cmd}"
+                if sys.platform == "darwin":
+                    script = f'tell application "Terminal" to do script "{cmd}"'
+                    subprocess.run(["osascript", "-e", script])
+                    return f"Spawned long-running dev command in new window: {cmd}"
+                else:
+                    os.system(f'start cmd.exe /k "{cmd}"')
+                    return f"Spawned long-running dev command in new window: {cmd}"
 
-            # Using PowerShell for robust execution on Windows
-            process = subprocess.Popen(
-                ["powershell", "-Command", cmd],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
+            if sys.platform == "darwin":
+                process = subprocess.Popen(
+                    cmd, shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+            else:
+                # Using PowerShell for robust execution on Windows
+                process = subprocess.Popen(
+                    ["powershell", "-Command", cmd],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
             stdout, stderr = process.communicate(timeout=15)
             if process.returncode == 0:
                 return stdout.strip() or f"Command executed successfully: {cmd}"
@@ -169,7 +182,7 @@ class DeveloperTools:
             
         try:
             prompt = (
-                f"Act as an autonomous AI agent running on a Windows machine. "
+                f"Act as an autonomous AI agent. You are running on sys.platform == '{sys.platform}'. "
                 f"Your goal is to write a Python script to achieve the following task: '{goal}'. "
                 "The script will be executed immediately. Ensure it is robust and prints clear output. "
                 "Output ONLY the raw Python code without markdown blocks."
@@ -276,8 +289,11 @@ class DeveloperTools:
     def close_current_file(self) -> str:
         """Simulate Ctrl+W to close the active tab in the editor."""
         try:
-            # Simulate Ctrl+W
-            pyautogui.hotkey('ctrl', 'w')
+            # Simulate Ctrl+W or Cmd+W
+            if sys.platform == 'darwin':
+                pyautogui.hotkey('command', 'w')
+            else:
+                pyautogui.hotkey('ctrl', 'w')
             return "Closed the current active file."
         except Exception as e:
             return f"Failed to close file: {str(e)}"

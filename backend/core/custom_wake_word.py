@@ -14,7 +14,7 @@ class ClapDetector:
     """
     Detects double claps as a wake word fallback/alternative.
     """
-    def __init__(self, threshold=12000, max_delay=1.5, min_delay=0.15):
+    def __init__(self, threshold=4000, max_delay=2.0, min_delay=0.1):
         self.threshold = float(os.getenv("CLAP_THRESHOLD", threshold))
         self.max_delay = max_delay
         self.min_delay = min_delay
@@ -47,35 +47,37 @@ class ClapDetector:
 
 class CustomWakeWordEngine:
     def __init__(self, model_path=None):
-        self.oww_model = None
-        self.use_oww = False
-
-        if _oww_available:
-            env_path = os.getenv("WAKE_WORD_MODEL_PATH", "")
-            self.model_path = model_path or (env_path if env_path else "hey_sivi")
+        self.use_vosk = False
+        self.recognizer = None
+        
+        # Initialize Vosk
+        try:
+            from vosk import Model, KaldiRecognizer
+            import json
             
-            if self.model_path and self.model_path.endswith(".onnx") and os.path.exists(self.model_path):
-                try:
-                    print(f" Loading OpenWakeWord model: {self.model_path}")
-                    self.oww_model = Model(
-                        wakeword_models=[self.model_path],
-                        inference_framework="onnx"
-                    )
-                    self.use_oww = True
-                except Exception as e:
-                    print(f" Failed to load OpenWakeWord model: {e}")
+            # Use the local vosk-model if it exists
+            env_path = os.getenv("WAKE_WORD_MODEL_PATH", "vosk-model")
+            if os.path.exists(env_path):
+                print(f" Loading Vosk model: {env_path}")
+                model = Model(env_path)
+                self.recognizer = KaldiRecognizer(model, 16000)
+                self.use_vosk = True
             else:
-                print(" No valid ONNX model found for OpenWakeWord.")
+                print(" Vosk model not found. Falling back to clap detection.")
+        except ImportError:
+            print(" Vosk not installed. Run: pip install vosk")
+        except Exception as e:
+            print(f" Failed to load Vosk model: {e}")
 
-        # Initialize Clap Detector
+        # Initialize Clap Detector fallback
         self.clap_detector = ClapDetector()
-        print(" Double-Clap Wake System initialized (Always Active).")
+        print(" Wake Word System initialized.")
 
         # PyAudio Setup
         self.FORMAT = pyaudio.paInt16
         self.CHANNELS = 1
         self.RATE = 16000
-        self.CHUNK = 1280
+        self.CHUNK = 4000
         self._audio = pyaudio.PyAudio()
         self.mic_stream = None
         self._running = False
@@ -83,7 +85,7 @@ class CustomWakeWordEngine:
     def start_listening(self, callback):
         self._running = True
         
-        print(" Starting microphone stream for Wake Word / Clap detection...")
+        print(" Starting microphone stream for Wake Word detection...")
         try:
             self.mic_stream = self._audio.open(
                 format=self.FORMAT,
@@ -96,40 +98,35 @@ class CustomWakeWordEngine:
             print(f" Failed to open microphone: {e}")
             return
 
-        threshold = float(os.getenv("WAKE_WORD_THRESHOLD", "0.5"))
-        if self.use_oww:
-            print(f" Voice wake word threshold: {threshold}")
-        print(f" Clap detection threshold: {self.clap_detector.threshold}")
-
         try:
             while self._running:
-                # Read audio chunk; suppress overflow errors
                 raw = self.mic_stream.read(self.CHUNK, exception_on_overflow=False)
                 audio_data = np.frombuffer(raw, dtype=np.int16)
 
                 triggered = False
 
-                # 1. Check Clap Detection
-                if self.clap_detector.process(audio_data):
+                # 1. Check Vosk
+                if self.use_vosk and self.recognizer:
+                    if self.recognizer.AcceptWaveform(raw):
+                        import json
+                        res = json.loads(self.recognizer.Result())
+                        text = res.get("text", "").lower()
+                        if text:
+                            # print(f" [Vosk] Heard: {text}")
+                            if "sivi" in text or "see we" in text or "cb" in text or "tv" in text or "cv" in text or "civil" in text or "siri" in text:
+                                print(f" \n Wake word detected! (Heard: '{text}')")
+                                triggered = True
+                
+                # 2. Check Clap Detection
+                if not triggered and self.clap_detector.process(audio_data):
                     print(" =========================================")
                     print("  👏 DOUBLE CLAP DETECTED! Waking up...  ")
                     print(" =========================================")
                     triggered = True
 
-                # 2. Check OpenWakeWord if available
-                if not triggered and self.use_oww and self.oww_model:
-                    prediction = self.oww_model.predict(audio_data)
-                    for model_key, score in prediction.items():
-                        if score > threshold:
-                            print(f" Wake word detected! Confidence: {score:.2f}")
-                            self.oww_model.reset()
-                            triggered = True
-                            break
-
                 if triggered:
                     callback()
-                    # Sleep briefly to avoid immediate re-triggers if noise continues
-                    time.sleep(1.5)
+                    time.sleep(0.5)
                     # Reset buffers
                     try:
                         available = self.mic_stream.get_read_available()
@@ -158,3 +155,4 @@ class CustomWakeWordEngine:
             self._audio.terminate()
         except Exception:
             pass
+

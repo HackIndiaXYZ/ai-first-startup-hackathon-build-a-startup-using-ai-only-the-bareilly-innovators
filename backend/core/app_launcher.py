@@ -1,4 +1,6 @@
 import os
+import sys
+import subprocess
 import re
 import webbrowser
 
@@ -75,12 +77,16 @@ class AppLauncher:
             except Exception as e:
                 return f"Failed to open link: {e}"
 
-        # Native Windows execution
+        # Native execution
         try:
-            # os.startfile acts exactly like double-clicking the file or running 'start' in cmd.
-            # It inherently checks the App Paths registry, so things like 'chrome.exe' just work.
-            os.startfile(target)
-            return f"Opening {app_name}."
+            if sys.platform == "darwin":
+                # For Mac, use open -a to launch applications by name
+                subprocess.run(["open", "-a", app_name])
+                return f"Opening {app_name}."
+            else:
+                # os.startfile acts exactly like double-clicking the file or running 'start' in cmd.
+                os.startfile(target)
+                return f"Opening {app_name}."
         except (FileNotFoundError, OSError):
             # If startfile fails (e.g., unknown .exe), fallback to Windows Taskbar Search
             try:

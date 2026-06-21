@@ -8,7 +8,9 @@ import os
 import sys
 import threading
 import requests
-import win32gui
+
+if sys.platform == "win32":
+    import win32gui
 
 # Fix: Ensure core/ is on the path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -65,18 +67,18 @@ class WakeWordListener:
         except Exception as e:
             print(f" Local TTS failed: {e}")
 
-    def _send_to_bridge(self, text: str) -> bool:
-        """Send recognized text to the Gemini Live bridge server."""
+    def _send_to_bridge(self, text: str) -> dict:
+        """Send recognized text to the Gemini Live bridge server. Returns JSON response or None."""
         try:
             r = requests.post(
                 f"{BRIDGE_URL}/voice/send-text",
                 json={"text": text},
                 timeout=5
             )
-            return r.status_code == 200
+            return r.json()
         except Exception as e:
             print(f" Bridge POST failed: {e}")
-            return False
+            return None
 
     def on_wake_word_detected(self):
         """Called when wake word fires. Prevents re-trigger via cooldown."""
@@ -86,41 +88,57 @@ class WakeWordListener:
 
         def _handle_wake():
             print("\n Wake word/Clap detected!")
-
-            # 1. Provide an instant, polite local greeting based on time of day
-            from datetime import datetime
-            hour = datetime.now().hour
-            if hour < 12:
-                wish = "Good morning, Sir."
-            elif hour < 18:
-                wish = "Good afternoon, Sir."
-            else:
-                wish = "Good evening, Sir."
             
-            greeting = f"{wish} I am listening."
+            # --- Provide instant audio feedback so the user knows they were heard! ---
+            try:
+                if sys.platform == "win32":
+                    import winsound
+                    winsound.PlaySound("SystemAsterisk", winsound.SND_ALIAS | winsound.SND_ASYNC)
+                elif sys.platform == "darwin":
+                    os.system("afplay /System/Library/Sounds/Glass.aiff &")
+                else:
+                    print("\a", end="", flush=True)
+            except Exception:
+                pass
 
             # Check if bridge server is running
             if self._bridge_connected():
-                # Provide instant local feedback so the user knows to speak
-                self._speak_local(greeting)
-
                 # Get the currently active window to give Sivi context
-                context = "The user has been greeted locally. Just listen carefully to their command."
+                context = "The user woke you up. Just listen carefully to their command."
                 try:
-                    hwnd = win32gui.GetForegroundWindow()
-                    if hwnd:
-                        window_title = win32gui.GetWindowText(hwnd).strip()
-                        if window_title:
-                            context = f"The user is looking at: {window_title}. The local system already said '{greeting}'. Just listen to their command and execute it."
+                    if sys.platform == "win32":
+                        import win32gui
+                        hwnd = win32gui.GetForegroundWindow()
+                        if hwnd:
+                            window_title = win32gui.GetWindowText(hwnd).strip()
+                            if window_title:
+                                context = f"The user is looking at: {window_title}. Just listen to their command and execute it."
                 except Exception:
                     pass
 
                 # Bridge is online — send a nudge so Gemini starts listening
-                self._send_to_bridge(f"[WAKE_WORD_ACTIVATED: User just woke you up. {context}]")
-                print(" Bridge is online. Waiting for user to speak into Gemini Live mic.")
+                wake_msg = f"[WAKE_WORD_ACTIVATED: User just woke you up. {context}]"
+                result = self._send_to_bridge(wake_msg)
+                
+                # If Gemini Live session isn't active yet, boot it up first
+                if result and result.get("error"):
+                    print(f" Gemini not connected: {result.get('error')}. Booting Sivi...")
+                    try:
+                        requests.post(f"{BRIDGE_URL}/voice/start", timeout=15)
+                        import time
+                        time.sleep(3)  # Give Gemini a moment to connect
+                        # Re-send the wake word nudge now that Gemini should be live
+                        self._send_to_bridge(wake_msg)
+                        print(" Sivi booted and wake word nudge re-sent.")
+                    except Exception as e:
+                        print(f" Failed to boot Sivi: {e}")
+                elif result and result.get("status") == "sent":
+                    print(" Bridge is online and Gemini is active. Sivi will respond via real voice.")
+                else:
+                    print(" Bridge POST returned unexpected result, Sivi may not respond.")
             else:
                 # Bridge offline — fall back to local command handling
-                self._speak_local(greeting)
+                print(" Bridge offline. Using local fallback.")
                 self._listen_local_command()
 
             # Reset cooldown after 3 seconds

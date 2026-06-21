@@ -22,7 +22,7 @@ def _get_api_key():
 
 class MedicalAssistant:
     def __init__(self):
-        self.model_name = 'gemini-2.5-flash'
+        self.model_name = 'gemini-flash-latest'
         if not _genai_available:
             print(" google.genai not installed. Medical AI offline.")
 

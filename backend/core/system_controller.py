@@ -1,4 +1,5 @@
 import os
+import sys
 import ctypes
 import subprocess
 import pyautogui
@@ -206,7 +207,10 @@ class SystemController:
             )
             return "Bluetooth enabled."
         except Exception as e:
-            os.startfile("ms-settings:bluetooth")
+            if sys.platform == "darwin":
+                subprocess.run(["open", "x-apple.systempreferences:com.apple.preferences.Bluetooth"])
+            else:
+                os.startfile("ms-settings:bluetooth")
             return "Opened Bluetooth settings."
 
     def bluetooth_off(self) -> str:
@@ -222,7 +226,10 @@ class SystemController:
             )
             return "Bluetooth disabled."
         except Exception as e:
-            os.startfile("ms-settings:bluetooth")
+            if sys.platform == "darwin":
+                subprocess.run(["open", "x-apple.systempreferences:com.apple.preferences.Bluetooth"])
+            else:
+                os.startfile("ms-settings:bluetooth")
             return "Opened Bluetooth settings."
 
     # ── Media ─────────────────────────────────────────────────────

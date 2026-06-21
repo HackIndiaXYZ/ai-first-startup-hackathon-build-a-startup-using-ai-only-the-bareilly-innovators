@@ -29,7 +29,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [serverOnline, setServerOnline] = useState(false);
   const [sysInfo, setSysInfo] = useState(null);
-  const [settings, setSettings] = useState({ api_key:'', user_name:'Rao Alok Yadav', personality_mode:'gf', gemini_model:'native_audio', gemini_voice:'Aoede', temperature:0.9 });
+  const [settings, setSettings] = useState({ api_key:'', user_name:'Rao Alok Yadav', personality_mode:'sivi', gemini_model:'native_audio', gemini_voice:'Aoede', temperature:0.9 });
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [voices, setVoices] = useState([]);
   const [models, setModels] = useState([]);
@@ -531,13 +531,7 @@ export default function App() {
         </div>
       ))}
 
-      <div style={{ marginBottom:'20px' }}>
-        <label style={{ fontSize:'13px', color:'#94a3b8', display:'block', marginBottom:'8px', fontWeight: 500 }}>Personality Mode</label>
-        <select className="input-field" value={settings.personality_mode} onChange={e => { setSettings(p => ({ ...p, personality_mode: e.target.value })); setSettingsDirty(true); }}
-          style={{ width:'100%', boxSizing:'border-box' }}>
-          {personalities.map(p => <option key={p.id} value={p.id}>{p.label} — {p.language}</option>)}
-        </select>
-      </div>
+
 
       <div style={{ marginBottom:'20px' }}>
         <label style={{ fontSize:'13px', color:'#94a3b8', display:'block', marginBottom:'8px', fontWeight: 500 }}>AI Model</label>
@@ -578,58 +572,21 @@ export default function App() {
 
   const activeCount = modules.filter(m => m.status === 'active').length;
 
-  const getThemeVars = (mode) => {
-    switch (mode) {
-      case 'gf':
-        return {
-          '--theme-primary-start': '#ec4899',
-          '--theme-primary-end': '#f43f5e',
-          '--theme-primary-rgb': '236, 72, 153',
-          '--theme-secondary-rgb': '244, 63, 94',
-          '--theme-bg-1': 'rgba(236, 72, 153, 0.15)',
-          '--theme-bg-2': 'rgba(244, 63, 94, 0.15)',
-        };
-      case 'developer':
-        return {
-          '--theme-primary-start': '#f97316',
-          '--theme-primary-end': '#ef4444',
-          '--theme-primary-rgb': '249, 115, 22',
-          '--theme-secondary-rgb': '239, 68, 68',
-          '--theme-bg-1': 'rgba(249, 115, 22, 0.15)',
-          '--theme-bg-2': 'rgba(239, 68, 68, 0.15)',
-        };
-      case 'assistant':
-        return {
-          '--theme-primary-start': '#14b8a6',
-          '--theme-primary-end': '#10b981',
-          '--theme-primary-rgb': '20, 184, 166',
-          '--theme-secondary-rgb': '16, 185, 129',
-          '--theme-bg-1': 'rgba(20, 184, 166, 0.15)',
-          '--theme-bg-2': 'rgba(16, 185, 129, 0.15)',
-        };
-      case 'professional':
-      default:
-        return {
-          '--theme-primary-start': '#3b82f6',
-          '--theme-primary-end': '#06b6d4',
-          '--theme-primary-rgb': '59, 130, 246',
-          '--theme-secondary-rgb': '139, 92, 246',
-          '--theme-bg-1': 'rgba(59, 130, 246, 0.15)',
-          '--theme-bg-2': 'rgba(139, 92, 246, 0.15)',
-        };
-    }
+  const getThemeVars = () => {
+    return {
+      '--theme-primary-start': '#3b82f6',
+      '--theme-primary-end': '#06b6d4',
+      '--theme-primary-rgb': '59, 130, 246',
+      '--theme-secondary-rgb': '139, 92, 246',
+      '--theme-bg-1': 'rgba(59, 130, 246, 0.15)',
+      '--theme-bg-2': 'rgba(139, 92, 246, 0.15)',
+    };
   };
 
-  const modeEmojis = { 
-    gf: <Heart size={22} fill="currentColor" />, 
-    professional: <Briefcase size={22} />, 
-    assistant: <Bot size={22} />, 
-    developer: <Code size={22} /> 
-  };
-  const currentEmoji = modeEmojis[settings.personality_mode] || <Activity size={22} />;
+  const currentEmoji = <Bot size={22} />;
 
   return (
-    <div className="app-wrapper" style={{ display:'flex', padding:'24px', gap:'24px', height:'100vh', width:'100vw', ...getThemeVars(settings.personality_mode) }}>
+    <div className="app-wrapper" style={{ display:'flex', padding:'24px', gap:'24px', height:'100vh', width:'100vw', ...getThemeVars() }}>
       
       {/* Toast Notification */}
       {toast && (

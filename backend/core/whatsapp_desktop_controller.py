@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import subprocess
 import urllib.parse
@@ -25,27 +26,50 @@ class WhatsAppDesktopController:
             clean_number = "91" + clean_number
         return clean_number
 
+    def _open_url(self, url: str):
+        if sys.platform == "darwin":
+            subprocess.run(["open", url])
+        else:
+            os.startfile(url)
+
     def _type_text_safe(self, text: str):
-        """Type text using clipboard paste for 100% reliability and speed."""
+        """Type text safely, falling back to pyautogui.write."""
+        ctrl_key = 'command' if sys.platform == 'darwin' else 'ctrl'
         try:
             import pyperclip
             pyperclip.copy(text)
-            pyautogui.hotkey('ctrl', 'v')
+            if sys.platform == 'darwin':
+                pyautogui.hotkey('command', 'v')
+            else:
+                pyautogui.hotkey(ctrl_key, 'v')
         except ImportError:
+            # Absolute fallback
+            pyautogui.write(text, interval=0.01)
+
+    def _press_enter(self):
+        """Robustly press the Enter key across macOS and Windows."""
+        if sys.platform == "darwin":
             try:
-                subprocess.run(
-                    ["powershell", "-Command", f"Set-Clipboard -Value '{text}'"],
-                    capture_output=True, timeout=3
-                )
-                pyautogui.hotkey('ctrl', 'v')
-            except Exception as e:
-                # Absolute fallback
-                pyautogui.write(text, interval=0.02)
+                # key code 36 is explicitly the Return key
+                subprocess.run(["osascript", "-e", 'tell application "System Events" to key code 36'])
+            except Exception:
+                pyautogui.press('enter')
+        else:
+            pyautogui.press('enter')
 
     def _ensure_whatsapp_focused(self, timeout: float = 5.0) -> bool:
         """Wait for WhatsApp Desktop window to appear and focus it.
         Returns True if WhatsApp is focused, False otherwise.
         """
+        if sys.platform == "darwin":
+            try:
+                subprocess.run(["osascript", "-e", 'tell application "WhatsApp" to activate'])
+                time.sleep(2.0)
+                return True
+            except Exception:
+                time.sleep(timeout)
+                return True
+
         if not _pywinauto_available:
             time.sleep(timeout)
             return True  # Best effort — assume it opened
@@ -84,61 +108,82 @@ class WhatsAppDesktopController:
         return False
 
     def _navigate_to_contact(self, contact_name: str) -> bool:
-        """Navigate to a contact's chat using the sidebar search bar.
-        
-        Uses pywinauto to find the search Edit control (NOT Ctrl+F which
-        searches within the current chat). Falls back to Ctrl+K for newer
-        WhatsApp versions if pywinauto can't find the search box.
-        """
+        """Navigate to a contact's chat using the Vision Agent."""
         try:
-            if _pywinauto_available:
-                try:
-                    app = Application(backend="uia").connect(title_re=".*WhatsApp.*", timeout=5)
-                    dlg = app.top_window()
-                    dlg.set_focus()
-                    time.sleep(0.3)
-                except Exception as e:
-                    time.sleep(2.0)
-
-            # Press Escape to close any open overlay / go back to chat list
-            pyautogui.press('escape')
-            time.sleep(0.3)
-
-            search_clicked = False
-            if _pywinauto_available:
-                try:
-                    app = Application(backend="uia").connect(title_re=".*WhatsApp.*", timeout=3)
-                    dlg = app.top_window()
-                    edits = dlg.descendants(control_type="Edit")
-                    for edit in edits:
-                        txt = edit.window_text().lower()
-                        # The sidebar search typically has "search" in its placeholder text
-                        if "search" in txt:
-                            edit.click_input()
-                            search_clicked = True
-                            break
-                except Exception as e:
-                    print(f" pywinauto search box lookup failed: {e}")
-
-            if not search_clicked:
-                # Fallback: Ctrl+F is the standard shortcut to search chats in WhatsApp Desktop
+            from core.vision_agent import vision_agent
+            
+            # Wait for WhatsApp to fully render
+            time.sleep(1.0)
+            
+            print(f" Vision navigating to contact: {contact_name}")
+            
+            # Try to find the contact directly in the recent chats sidebar
+            coords = vision_agent.find_ui_element(f"The chat specifically named '{contact_name}' in the left sidebar recent chats list.")
+            
+            if coords:
+                print(f" Found '{contact_name}' in recent chats. Clicking it.")
+                pyautogui.click(coords[0], coords[1])
+                time.sleep(0.5)
+                return True
+                
+            print(f" '{contact_name}' not found in recent chats. Searching globally...")
+            
+            # If not found, find the global search bar
+            search_coords = vision_agent.find_ui_element("The 'Search' box or magnifying glass icon at the top of the left sidebar.")
+            
+            if search_coords:
+                print(" Found Search bar. Clicking it.")
+                pyautogui.click(search_coords[0], search_coords[1])
+                time.sleep(0.2)
+                
+                # Clear any existing text
+                if sys.platform == 'darwin':
+                    subprocess.run(["osascript", "-e", 'tell application "System Events" to keystroke "a" using command down'])
+                else:
+                    pyautogui.hotkey('ctrl', 'a')
+                time.sleep(0.1)
+                
+                # Type the name
+                self._type_text_safe(contact_name)
+                time.sleep(1.0) # Wait for search results
+                
+                # Use vision to find the top search result
+                result_coords = vision_agent.find_ui_element(f"The top search result matching '{contact_name}' below the search bar.")
+                if result_coords:
+                    print(" Found search result. Clicking it.")
+                    pyautogui.click(result_coords[0], result_coords[1])
+                    time.sleep(0.5)
+                    return True
+                else:
+                    print(" Could not find contact in search results. Trying to hit Down Arrow and Enter as fallback.")
+                    # Fallback to pure UI keys if vision fails on the search result
+                    if sys.platform == 'darwin':
+                        subprocess.run(["osascript", "-e", 'tell application "System Events" to key code 125'])
+                    else:
+                        pyautogui.press('down')
+                    time.sleep(0.1)
+                    self._press_enter()
+                    time.sleep(0.5)
+                    return True
+            
+            print(" Vision Agent failed to find the Search bar. Falling back to Command+F.")
+            # Absolute fallback to the old keyboard shortcuts if Vision entirely fails
+            if sys.platform == 'darwin':
+                subprocess.run(["osascript", "-e", 'tell application "System Events" to keystroke "f" using command down'])
+                time.sleep(0.5)
+            else:
                 pyautogui.hotkey('ctrl', 'f')
-
-            time.sleep(0.5)
-
-            # Clear any existing text in the search box
-            pyautogui.hotkey('ctrl', 'a')
-            time.sleep(0.1)
-
-            # Type the contact name with Unicode support
+                time.sleep(0.2)
+                
             self._type_text_safe(contact_name)
-            time.sleep(2.0)  # Increased wait for search results to load
-
-            # Select the first search result
-            pyautogui.press('down')
+            time.sleep(0.8)
+            if sys.platform == 'darwin':
+                subprocess.run(["osascript", "-e", 'tell application "System Events" to key code 125'])
+            else:
+                pyautogui.press('down')
             time.sleep(0.3)
-            pyautogui.press('enter')
-            time.sleep(1.5)  # Wait for chat to load after selection
+            self._press_enter()
+            time.sleep(1.5)
             return True
 
         except Exception as e:
@@ -148,56 +193,50 @@ class WhatsAppDesktopController:
     # ── Main Actions ─────────────────────────────────────────────────────────
 
     def send_whatsapp_message(self, number: str, message: str) -> str:
-        clean_number = self._clean_number(number)
-
-        if clean_number and len(clean_number) >= 10:
-            # Phone number path: use WhatsApp deep link with pre-filled text
-            encoded_message = urllib.parse.quote(message)
-            os.startfile(f"whatsapp://send?phone={clean_number}&text={encoded_message}")
-            def _wait_and_send():
-                # Wait for WhatsApp to open and load the chat
-                if not self._ensure_whatsapp_focused(timeout=6.0):
-                    print(" WhatsApp did not open in time.")
-                    return
-                # Wait extra time for the deep link to resolve and chat to appear
-                if not self._wait_for_chat_loaded(timeout=8.0):
-                    print(" Chat did not load in time, pressing Enter anyway.")
-                # Press Enter to send the pre-filled message
-                time.sleep(0.5)
-                pyautogui.press('enter')
-            threading.Thread(target=_wait_and_send, daemon=True).start()
-        else:
-            # Contact name path: open WhatsApp and search for contact
-            os.startfile("whatsapp://")
-            def _search_and_send():
-                if not self._ensure_whatsapp_focused(timeout=6.0):
-                    print(" WhatsApp did not open in time.")
-                    return
-                self._navigate_to_contact(number)
-                if message:
-                    # Wait for chat input to be ready
+        # Use exclusively UI automation (Search bar -> Type -> Enter) as requested by user.
+        # This avoids Mac deep-link confirmation popups and ensures the chat is fully focused.
+        self._open_url("whatsapp://")
+        
+        def _search_and_send():
+            if not self._ensure_whatsapp_focused(timeout=6.0):
+                print(" WhatsApp did not open in time.")
+                return
+            
+            # Use the search bar to find the contact
+            if not self._navigate_to_contact(number):
+                print(f" Failed to navigate to {number}.")
+                return
+            
+            if message:
+                # Wait for chat input to be ready. 
+                # On Mac, wait exactly 1s. A 5s delay often causes the user to move the mouse and lose focus.
+                if sys.platform == "darwin":
+                    time.sleep(1.0)
+                else:
                     self._wait_for_chat_loaded(timeout=5.0)
-                    time.sleep(0.5)
-                    self._type_text_safe(message)
-                    time.sleep(0.5)
-                    pyautogui.press('enter')
-            threading.Thread(target=_search_and_send, daemon=True).start()
-
+                
+                time.sleep(0.5)
+                self._type_text_safe(message)
+                time.sleep(0.5)
+                self._press_enter()
+                
+        threading.Thread(target=_search_and_send, daemon=True).start()
         return f"Sending message to {number} via WhatsApp Desktop."
 
     def read_chat(self, contact: str = None) -> str:
         """Read recent messages from the currently open chat, or navigate to a contact first."""
-        if not _pywinauto_available:
-            return "pywinauto not installed."
-
         try:
             # If a contact name was provided, navigate to their chat first
             if contact:
-                os.startfile("whatsapp://")
+                self._open_url("whatsapp://")
                 if not self._ensure_whatsapp_focused(timeout=6.0):
                     return "WhatsApp did not open in time."
                 self._navigate_to_contact(contact)
                 time.sleep(1.0)
+
+            if not _pywinauto_available:
+                from core.screen_reader import screen_reader
+                return screen_reader.read_screen("Please read the most recent WhatsApp messages visible on the screen. Format as 'Name: Message'")
 
             app = Application(backend="uia").connect(title_re=".*WhatsApp.*", timeout=3)
             dlg = app.top_window()
@@ -229,13 +268,13 @@ class WhatsAppDesktopController:
 
         def _invoke_call():
             if clean_number and len(clean_number) >= 10:
-                os.startfile(f"whatsapp://send?phone={clean_number}")
+                self._open_url(f"whatsapp://send?phone={clean_number}")
                 if not self._ensure_whatsapp_focused(timeout=6.0):
                     print(" WhatsApp did not open in time.")
                     return
                 self._wait_for_chat_loaded(timeout=6.0)
             else:
-                os.startfile("whatsapp://")
+                self._open_url("whatsapp://")
                 if not self._ensure_whatsapp_focused(timeout=6.0):
                     print(" WhatsApp did not open in time.")
                     return
@@ -285,16 +324,16 @@ class WhatsAppDesktopController:
                         time.sleep(1)
                         self._type_text_safe(os.path.abspath(filepath))
                         time.sleep(0.5)
-                        pyautogui.press('enter')
+                        self._press_enter()
                         time.sleep(1)
-                        pyautogui.press('enter')  # Send
+                        self._press_enter()  # Send
             except Exception as e:
                 print(f" Failed to attach: {e}")
 
         if clean_number and len(clean_number) >= 10:
-            os.startfile(f"whatsapp://send?phone={clean_number}")
+            self._open_url(f"whatsapp://send?phone={clean_number}")
         else:
-            os.startfile("whatsapp://")
+            self._open_url("whatsapp://")
 
         threading.Thread(target=_attach, daemon=True).start()
         return f"Attaching media for {number}."
@@ -328,9 +367,9 @@ class WhatsAppDesktopController:
                 print(f" Failed to record voice note: {e}")
 
         if clean_number:
-            os.startfile(f"whatsapp://send?phone={clean_number}")
+            self._open_url(f"whatsapp://send?phone={clean_number}")
         else:
-            os.startfile("whatsapp://")
+            self._open_url("whatsapp://")
 
         threading.Thread(target=_record, daemon=True).start()
         return f"Recording voice note for {duration} seconds."

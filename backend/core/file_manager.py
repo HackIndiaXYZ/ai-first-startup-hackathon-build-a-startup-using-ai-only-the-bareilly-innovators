@@ -4,6 +4,8 @@ Voice-controlled file and folder operations.
 """
 
 import os
+import sys
+import subprocess
 import shutil
 import glob
 from pathlib import Path
@@ -115,7 +117,10 @@ class FileManager:
     def open_file(self, name: str) -> str:
         path = self._resolve_path(name)
         if path.exists():
-            os.startfile(str(path))
+            if sys.platform == "darwin":
+                subprocess.run(["open", str(path)])
+            else:
+                os.startfile(str(path))
             return f"Opening {name}."
         return f"File '{name}' not found."
 
