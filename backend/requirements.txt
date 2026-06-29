@@ -28,3 +28,8 @@ pywinauto>=0.6.9 ; sys_platform == 'win32'
 pyperclip>=1.8.2
 plyer>=2.1.0
 winsdk>=1.0.0b10 ; sys_platform == 'win32'
+# HTTP client for Gemini REST (TextLLM + key pool)
+httpx>=0.27.0
+chromadb>=1.5.0
+mss>=9.0.0
+spotipy>=2.23.0

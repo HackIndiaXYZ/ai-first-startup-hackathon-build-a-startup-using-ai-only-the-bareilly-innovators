@@ -50,13 +50,14 @@ class NotificationMonitor:
             return []
 
     def get_new_notifications(self) -> list:
-        # Run async function in a synchronous wrapper
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        
-        return loop.run_until_complete(self._get_new_notifications_async())
+        """Run async notification fetch safely from any context."""
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(asyncio.run, self._get_new_notifications_async())
+            try:
+                return future.result(timeout=10)
+            except Exception as e:
+                logger.error(f"Notification fetch error: {e}")
+                return []
 
 notification_monitor = NotificationMonitor()

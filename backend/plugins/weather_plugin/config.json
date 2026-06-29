@@ -1,7 +1,7 @@
 {
     "name": "Weather Plugin",
     "version": "1.0.0",
-    "author": "TITAN Dev",
+    "author": "SIVI Dev",
     "description": "Get weather info by voice (uses wttr.in free API)",
     "commands": ["weather", "temperature", "forecast"],
     "enabled": true,

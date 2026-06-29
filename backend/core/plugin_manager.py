@@ -1,5 +1,5 @@
 """
-TITAN AI  Plugin Manager
+SIVI AI  Plugin Manager
 Dynamically discovers, loads, and manages plugins from the plugins/ directory.
 """
 

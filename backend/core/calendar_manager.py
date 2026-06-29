@@ -1,12 +1,15 @@
 """
-TITAN AI — Google Calendar Manager Module
+SIVI AI — Google Calendar Manager Module
 Voice-controlled Google Calendar integration.
 Requires: pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
 Requires: credentials.json from Google Cloud Console
 """
 
 import os
+import logging
 from datetime import datetime, timezone, timedelta
+
+logger = logging.getLogger("sivi.calendar")
 
 try:
     from google.oauth2.credentials import Credentials
@@ -106,6 +109,79 @@ class CalendarManager:
             return f"Event '{title}' created for {hours_from_now} hour(s) from now."
         except Exception as e:
             return f"Failed to create event: {e}"
+
+    def quick_add_event(self, text: str) -> str:
+        """Use Google Calendar NLP to quickly add an event from natural language."""
+        if not self.service:
+            return "Google Calendar not configured."
+        if not text.strip():
+            return "Please provide event details."
+            
+        try:
+            event = self.service.events().quickAdd(calendarId='primary', text=text).execute()
+            
+            # Format output nicely
+            summary = event.get('summary', 'Event')
+            start_dt = event.get('start', {}).get('dateTime')
+            if start_dt:
+                try:
+                    dt = datetime.fromisoformat(start_dt)
+                    time_str = dt.strftime("%d %b %I:%M %p")
+                except:
+                    time_str = start_dt
+            else:
+                time_str = event.get('start', {}).get('date', 'today')
+                
+            loc = event.get('location', '')
+            loc_str = f" at {loc}" if loc else ""
+                
+            return f"Scheduled: {summary} on {time_str}{loc_str}."
+        except Exception as e:
+            return f"Failed to schedule via natural language: {e}"
+
+    def get_today_events_list(self) -> list:
+        """Returns a structured list of today's events for UI rendering."""
+        if not self.service:
+            return []
+
+        from zoneinfo import ZoneInfo
+        ist = ZoneInfo("Asia/Kolkata")
+        now_ist = datetime.now(tz=ist)
+        # Compute start and end of today in IST, then convert to UTC for the API
+        start_of_day_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_of_day_ist = now_ist.replace(hour=23, minute=59, second=59, microsecond=0)
+
+        try:
+            events_result = self.service.events().list(
+                calendarId="primary",
+                timeMin=start_of_day_ist.isoformat(),
+                timeMax=end_of_day_ist.isoformat(),
+                maxResults=10,
+                singleEvents=True,
+                orderBy="startTime"
+            ).execute()
+            events = events_result.get("items", [])
+            
+            out = []
+            for e in events:
+                summary = e.get("summary", "Busy")
+                location = e.get("location", "")
+                start = e.get("start", {}).get("dateTime")
+                if not start:
+                    start_str = "All Day"
+                else:
+                    dt = datetime.fromisoformat(start)
+                    start_str = dt.strftime("%I:%M %p")
+                
+                out.append({
+                    "title": summary,
+                    "time": start_str,
+                    "location": location
+                })
+            return out
+        except Exception as e:
+            logger.error(f"Calendar list error: {e}")
+            return []
 
 
 calendar_manager = CalendarManager()

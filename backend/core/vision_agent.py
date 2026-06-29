@@ -1,5 +1,5 @@
 """
-TITAN AI — Vision Agent
+SIVI AI — Vision Agent
 Leverages Gemini's spatial reasoning to find the X, Y coordinates of UI elements on the screen.
 """
 

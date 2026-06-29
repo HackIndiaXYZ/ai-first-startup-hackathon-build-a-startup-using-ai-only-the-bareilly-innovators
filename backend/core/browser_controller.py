@@ -257,6 +257,24 @@ class BrowserController:
     def manage_tabs(self, action: str) -> str:
         return self._run_async(self._manage_tabs(action))
 
+    async def _list_tabs(self) -> str:
+        if not self.browser_context:
+            return "Browser offline."
+        pages = self.browser_context.pages
+        if not pages:
+            return "No tabs open."
+        tab_titles = []
+        for i, page in enumerate(pages):
+            try:
+                title = await page.title()
+                tab_titles.append(f"[{i+1}] {title}")
+            except:
+                pass
+        return "Open browser tabs:\n" + "\n".join(tab_titles)
+
+    def list_tabs(self) -> str:
+        return self._run_async(self._list_tabs())
+
 
 # Singleton instance
 browser_controller = BrowserController()

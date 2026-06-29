@@ -1,5 +1,5 @@
 """
-TITAN AI  File Manager Module
+SIVI AI  File Manager Module
 Voice-controlled file and folder operations.
 """
 

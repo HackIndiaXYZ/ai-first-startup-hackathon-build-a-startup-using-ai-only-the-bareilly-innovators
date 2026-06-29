@@ -29,34 +29,20 @@ class SystemController:
         return "Volume muted/unmuted."
 
     def set_volume(self, level: int) -> str:
-        """Set volume to exact percentage using PowerShell / nircmd."""
+        """Set volume to exact percentage using PowerShell."""
         level = max(0, min(100, level))
         try:
-            # Use nircmd if available (most reliable), else PowerShell SoundMixer
-            result = subprocess.run(
-                ["powershell", "-Command",
-                 f"$wshShell = New-Object -ComObject WScript.Shell; "
-                 f"for ($i=0; $i -lt 50; $i++) {{ $wshShell.SendKeys([char]174) }}; "  # mute/min first
-                 f"$vol = {level}; "
-                 f"Add-Type -TypeDefinition '"
-                 "using System.Runtime.InteropServices; "
-                 "[Guid(\"5CDF2C82-841E-4546-9722-0CF74078229A\"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)] "
-                 "interface IAudioEndpointVolume { void _VT0(); void _VT1(); void _VT2(); void _VT3(); int SetMasterVolumeLevelScalar(float fLevel, System.Guid pguidEventContext); } "
-                 "'; "
-                 ],
-                capture_output=True, text=True, timeout=5
+            # Use PowerShell with the WScript.Shell audio COM interface
+            ps_cmd = (
+                "$wsh = New-Object -ComObject WScript.Shell; "
+                # Mute then unmute (resets volume internally)
+                "for($i=0;$i -lt 50;$i++){$wsh.SendKeys([char]174)}; "  # VolumeDown x50 → mute
+                f"for($i=0;$i -lt {level // 2};$i++){{$wsh.SendKeys([char]175)}}"  # VolumeUp to target
             )
-            # Simpler fallback: press volumeup/down to approximate
-            # First mute, then unmute, then set by pressing keys
-            # Use nircmd approach: bring to 0 then raise
-            pyautogui.press('volumemute')
-            time.sleep(0.1)
-            pyautogui.press('volumemute')
-            # Press volumedown 50 times to ensure we're at minimum
-            pyautogui.press('volumedown', presses=50)
-            # Now press volumeup for desired percentage (each press ≈ 2%)
-            presses = max(1, level // 2)
-            pyautogui.press('volumeup', presses=presses)
+            subprocess.run(
+                ["powershell", "-Command", ps_cmd],
+                capture_output=True, timeout=8
+            )
             return f"Volume set to approximately {level}%."
         except Exception as e:
             return f"Could not set volume: {e}"

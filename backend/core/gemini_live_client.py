@@ -17,6 +17,12 @@ import websockets
 
 logger = logging.getLogger("sivi.gemini_live")
 
+# Key pool import — safe: falls back gracefully if pool unavailable
+try:
+    from gemini_key_pool import key_pool as _key_pool
+except Exception:
+    _key_pool = None
+
 # ── Constants ─────────────────────────────────────────────────────
 
 WS_BASE_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent"
@@ -63,17 +69,23 @@ class GeminiLiveClient:
     """
     WebSocket client for Gemini Live BidiGenerateContent API.
     Mirrors the Android Sivi protocol exactly.
+
+    Key rotation:
+      Pulls its API key from GeminiKeyPool on every connect attempt.
+      On 429 / quota errors reports back to pool so next connect
+      uses the next healthy key automatically.
     """
 
     def __init__(
         self,
-        api_key: str,
+        api_key: str = "",          # kept for backward compat; pool takes precedence
         model: str = "models/gemini-2.5-flash-native-audio-preview-12-2025",
         voice: str = "Aoede",
         system_prompt: str = "",
         temperature: float = 0.7,
     ):
-        self.api_key = api_key
+        self._fallback_api_key = api_key  # used only if key pool is unavailable
+        self.api_key = self._pick_key()   # active key for current attempt
         self.model = model
         self.voice = voice
         self.system_prompt = system_prompt
@@ -108,7 +120,15 @@ class GeminiLiveClient:
     def is_connected(self) -> bool:
         return self._connected
 
+    def _pick_key(self) -> str:
+        """Get the best available key from the pool, or fallback."""
+        if _key_pool is not None:
+            return _key_pool.get()
+        return self._fallback_api_key
+
     def _build_ws_url(self) -> str:
+        # Always fetch a fresh key — pool returns least-used / not-cooling key
+        self.api_key = self._pick_key()
         return f"{WS_BASE_URL}?key={self.api_key}"
 
     def _build_setup_message(self) -> dict:
@@ -136,13 +156,20 @@ class GeminiLiveClient:
         }
 
     async def connect(self):
-        """Connect to Gemini Live WebSocket with auto-reconnect loop."""
+        """Connect to Gemini Live WebSocket with auto-reconnect + key rotation."""
         self._should_run = True
 
         while self._should_run:
+            current_key = self._pick_key()   # fresh key each attempt
+            self.api_key = current_key
+            url = f"{WS_BASE_URL}?key={current_key}"
+
             try:
-                logger.info(f"Connecting to Gemini Live... Model: {self.model}, Voice: {self.voice}")
-                url = self._build_ws_url()
+                logger.info(
+                    f"Connecting to Gemini Live... "
+                    f"Model: {self.model}, Voice: {self.voice}, "
+                    f"Key: ...{current_key[-6:]}"
+                )
 
                 self._ws = await websockets.connect(
                     url,
@@ -182,7 +209,17 @@ class GeminiLiveClient:
                     logger.warning(f"Unexpected setup response: {data}")
 
             except websockets.exceptions.ConnectionClosedError as e:
-                logger.warning(f"WebSocket closed: {e}")
+                err = str(e)
+                logger.warning(f"WebSocket closed: {err}")
+                # Detect quota / auth errors and report to pool
+                if _key_pool:
+                    if "429" in err or "quota" in err.lower() or "resource_exhausted" in err.lower():
+                        _key_pool.report_quota(current_key)
+                        logger.info(f"[KeyPool] Reported quota on ...{current_key[-6:]} — next key on reconnect")
+                    elif "401" in err or "unauthenticated" in err.lower() or "invalid" in err.lower():
+                        _key_pool.report_invalid(current_key)
+                        logger.error(f"[KeyPool] Reported invalid on ...{current_key[-6:]}")
+
             except Exception as e:
                 logger.error(f"Connection error: {e}")
                 if self.on_error:

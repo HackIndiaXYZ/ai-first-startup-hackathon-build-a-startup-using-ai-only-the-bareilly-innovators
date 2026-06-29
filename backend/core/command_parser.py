@@ -1,5 +1,5 @@
 """
-TITAN — Voice Command Parser (PC Edition)
+SIVI — Voice Command Parser (PC Edition)
 Parses transcribed speech (Hinglish + English) into structured PC commands.
 Returns None if no command matches so Gemini handles it as conversation.
 """
@@ -141,6 +141,7 @@ TAB_CLOSE_KEYWORDS = ["close tab", "tab band karo"]
 BROWSER_READ_PAGE_KEYWORDS = ["read this page", "read page", "read website", "website padho", "summarize page"]
 BROWSER_FULLSCREEN_KEYWORDS = ["browser full screen", "toggle full screen", "full screen karo", "video full screen", "full screen mode"]
 BROWSER_SCROLL_KEYWORDS = ["scroll page down", "scroll page up", "scroll to top", "scroll to bottom"]
+BROWSER_STATUS_KEYWORDS = ["browser status", "get open tabs", "list tabs", "open tabs", "how many tabs", "check open tabs"]
 
 
 # ── Cached compiled patterns ──────────────────────────────────────
@@ -168,10 +169,60 @@ def parse_command(text: str) -> "PCCommand | None":
         "WIFI_ON", "WIFI_OFF", "BLUETOOTH_ON", "BLUETOOTH_OFF", "MEDIA_PLAY_PAUSE",
         "MEDIA_NEXT", "MEDIA_PREV", "READ_CLIPBOARD", "NEWS", "SYSTEM_STATUS",
         "READ_WINDOWS", "FORGET_ALL", "ANALYZE_EMOTION", "DESCRIBE_SCENE", "DEV_GIT_STATUS",
-        "TAB_NEXT", "TAB_PREV", "TAB_NEW", "TAB_CLOSE", "BROWSER_READ_PAGE", "BROWSER_FULLSCREEN"
+        "TAB_NEXT", "TAB_PREV", "TAB_NEW", "TAB_CLOSE", "BROWSER_READ_PAGE", "BROWSER_FULLSCREEN", "BROWSER_STATUS"
     }
     if text_upper in VALID_NO_PARAM_TYPES:
         return PCCommand(type=text_upper)
+
+    # Fast-path 2: technical tag types with parameters (e.g. "OPEN_APP chrome")
+    parts = text.strip().split(" ", 1)
+    if len(parts) == 2:
+        cmd_type = parts[0].upper()
+        cmd_val = parts[1].strip()
+        
+        # Strip trailing punctuation for the value if needed
+        while cmd_val and cmd_val[-1] in string.punctuation:
+            cmd_val = cmd_val[:-1]
+            
+        if cmd_type == "OPEN_APP":
+            resolved = APP_ALIASES.get(cmd_val.lower(), cmd_val.lower())
+            return PCCommand(type="OPEN_APP", params={"app_name": resolved, "raw": cmd_val})
+        elif cmd_type == "CLOSE_APP":
+            return PCCommand(type="CLOSE_APP", params={"app_name": cmd_val.lower()})
+        elif cmd_type == "SWITCH_APP":
+            return PCCommand(type="SWITCH_APP", params={"app_name": cmd_val.lower()})
+        elif cmd_type == "TYPE_TEXT":
+            return PCCommand(type="TYPE_TEXT", params={"text": cmd_val})
+        elif cmd_type == "SEARCH":
+            return PCCommand(type="SEARCH", params={"query": cmd_val})
+        elif cmd_type == "PRESS_KEY":
+            return PCCommand(type="PRESS_KEY", params={"key": cmd_val})
+        elif cmd_type in ["PLAY_YOUTUBE", "PLAY_SPOTIFY"]:
+            return PCCommand(type=cmd_type, params={"query": cmd_val})
+        elif cmd_type == "DEV_RUN_CMD":
+            return PCCommand(type="DEV_RUN_CMD", params={"command": cmd_val})
+        elif cmd_type == "GET_WEATHER":
+            return PCCommand(type="GET_WEATHER", params={"location": cmd_val})
+        elif cmd_type == "REMEMBER":
+            return PCCommand(type="REMEMBER", params={"fact": cmd_val})
+        elif cmd_type in ["CREATE_FILE", "DELETE_FILE", "OPEN_FILE", "FIND_FILE"]:
+            return PCCommand(type=cmd_type, params={"name": cmd_val})
+        elif cmd_type == "LIST_FILES":
+            return PCCommand(type="LIST_FILES", params={"folder": cmd_val})
+        elif cmd_type in ["MINIMIZE_WINDOW", "MAXIMIZE_WINDOW"]:
+            return PCCommand(type=cmd_type, params={"app_name": cmd_val})
+        elif cmd_type == "SWITCH_MODE":
+            return PCCommand(type="SWITCH_MODE", params={"mode": cmd_val})
+        elif cmd_type == "SET_TIMER":
+            # Extract number from SET_TIMER <amount> <unit>
+            try:
+                sec_match = re.search(r'\d+', cmd_val)
+                amount = int(sec_match.group(0)) if sec_match else 60
+                unit_val = cmd_val.lower()
+                multiplier = 3600 if "hour" in unit_val or "hr" in unit_val else (60 if "min" in unit_val else 1)
+                return PCCommand(type="SET_TIMER", params={"seconds": amount * multiplier, "label": "Timer"})
+            except:
+                pass
 
     # Normalise
     text_lower = text.lower().strip().replace('"', '').replace("'", "")
@@ -180,7 +231,7 @@ def parse_command(text: str) -> "PCCommand | None":
     text_lower = text_lower.strip()
 
     # ── Strip Wake Words / Assistant Names ────────────────────────
-    wake_words_to_strip = ["sivi", "hey sivi", "jarvis", "hey jarvis", "titan", "hey titan", "hey"]
+    wake_words_to_strip = ["sivi", "hey sivi", "jarvis", "hey jarvis", "sivi", "hey sivi", "hey"]
     for name in wake_words_to_strip:
         if text_lower.startswith(name + " "):
             text_lower = text_lower[len(name):].strip()
@@ -258,6 +309,7 @@ def parse_command(text: str) -> "PCCommand | None":
     # ── Advanced Browser Control ──────────────────────────────────
     if _exact_phrase(text_lower, BROWSER_READ_PAGE_KEYWORDS): return PCCommand(type="BROWSER_READ_PAGE")
     if _exact_phrase(text_lower, BROWSER_FULLSCREEN_KEYWORDS): return PCCommand(type="BROWSER_FULLSCREEN")
+    if _exact_phrase(text_lower, BROWSER_STATUS_KEYWORDS): return PCCommand(type="BROWSER_STATUS")
     
     for kw in BROWSER_SCROLL_KEYWORDS:
         if kw in text_lower:
@@ -488,15 +540,23 @@ def parse_command(text: str) -> "PCCommand | None":
             return PCCommand(type="MAXIMIZE_WINDOW", params={"app_name": win_name})
 
     # ── Calendar ──────────────────────────────────────────────────
-    for kw in CALENDAR_KEYWORDS:
-        if kw in text_lower:
-            if "create" in text_lower or "add" in text_lower or "schedule" in text_lower:
-                for prefix in ["schedule ", "create event ", "add event ", "add to calendar "]:
-                    if prefix in text_lower:
-                        title = text_lower.split(prefix, 1)[-1].strip()
-                        return PCCommand(type="CREATE_EVENT", params={"title": title})
-                return PCCommand(type="CREATE_EVENT", params={"title": ""})
-            return PCCommand(type="CALENDAR_EVENTS")
+    # Priority: CREATE intent first (before list), to avoid 'schedule X' routing to CALENDAR_EVENTS
+    _create_intent = re.search(r'\b(create|add|schedule|set|book)\b', text_lower)
+    _has_cal_keyword = any(kw in text_lower for kw in CALENDAR_KEYWORDS)
+    
+    if _create_intent and _has_cal_keyword:
+        # Try to extract the event title from natural language
+        for prefix in ["schedule event ", "create event ", "add event ", "book event ",
+                       "schedule ", "add to calendar ", "set a reminder "]:
+            if prefix in text_lower:
+                title = text_lower.split(prefix, 1)[-1].strip()
+                if title:
+                    return PCCommand(type="CREATE_EVENT", params={"title": title})
+        # Fallback: send whole text as quickAdd NLP
+        return PCCommand(type="CREATE_EVENT", params={"title": text_lower})
+
+    if _has_cal_keyword:
+        return PCCommand(type="CALENDAR_EVENTS")
 
     # ── Medical ───────────────────────────────────────────────────
     for kw in MEDICAL_KEYWORDS:
@@ -642,5 +702,19 @@ def parse_command(text: str) -> "PCCommand | None":
     for kw in DEV_CLOSE_EDITOR_KEYWORDS:
         if kw in text_lower:
             return PCCommand(type="DEV_CLOSE_EDITOR")
+
+    # ── MCP (Model Context Protocol) ──────────────────────────────
+    if text_lower.startswith("mcp "):
+        parts = text_lower[4:].split(" ", 2)
+        if len(parts) >= 2:
+            server = parts[0]
+            tool = parts[1]
+            args_str = parts[2] if len(parts) > 2 else "{}"
+            import json
+            try:
+                args = json.loads(args_str)
+            except:
+                args = {"query": args_str}
+            return PCCommand(type="MCP_CALL", params={"server": server, "tool": tool, "args": args})
 
     return None

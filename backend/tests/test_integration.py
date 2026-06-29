@@ -1,5 +1,5 @@
 """
-TITAN/Sivi — Comprehensive Integration Test Suite
+SIVI/Sivi — Comprehensive Integration Test Suite
 Tests every module import, function call, and integration flow.
 """
 

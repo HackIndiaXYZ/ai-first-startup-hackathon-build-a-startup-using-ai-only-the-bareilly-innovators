@@ -17,7 +17,7 @@ def test_command(module_name, command):
     time.sleep(1) # Small delay between requests
 
 def run_all_tests():
-    print(" Starting TITAN System Tests...\n")
+    print(" Starting SIVI System Tests...\n")
     
     # 1. App Launcher
     test_command("App Launcher", "open calculator")
@@ -31,7 +31,7 @@ def run_all_tests():
     test_command("Window Manager", "minimize calculator")
     
     # 4. Keyboard Controller
-    test_command("Keyboard", "type Hello TITAN")
+    test_command("Keyboard", "type Hello SIVI")
     
     # 5. News
     test_command("News", "what's the news")
@@ -40,7 +40,7 @@ def run_all_tests():
     test_command("Medical AI", "I have a headache")
     
     # 7. File Manager
-    test_command("File Manager", "create file test_titan.txt")
+    test_command("File Manager", "create file test_sivi.txt")
     test_command("File Manager", "list files in Desktop")
     
     # 8. Plugin System

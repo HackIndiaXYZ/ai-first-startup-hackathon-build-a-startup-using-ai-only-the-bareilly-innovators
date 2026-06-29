@@ -1,5 +1,5 @@
 """
-TITAN AI  Spotify Controller Module
+SIVI AI  Spotify Controller Module
 Voice-controlled Spotify playback via Spotipy (Web API).
 Requires: pip install spotipy
 Requires: SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_REDIRECT_URI in .env

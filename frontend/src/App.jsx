@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Terminal, Blocks, Settings, 
   Heart, Briefcase, Bot, Code, Play, Square, 
   Mic, MicOff, Hand, BatteryCharging, Activity,
-  CloudRain, Newspaper, Battery, Calendar, Monitor, Clock, ShieldCheck, Zap, Sun
+  CloudRain, Newspaper, Battery, Calendar, Monitor, Clock, ShieldCheck, Zap, Sun, Cpu, Wifi
 } from 'lucide-react';
 
 const API = 'http://localhost:8000';
@@ -22,6 +22,7 @@ export default function App() {
   const [isMuted, setIsMuted] = useState(false);
   const [amplitude, setAmplitude] = useState(0);
   const [modules, setModules] = useState([]);
+  const [agentList, setAgentList] = useState([]);
   const [history, setHistory] = useState([]);
   const [chat, setChat] = useState([]);
   const [cmdInput, setCmdInput] = useState('');
@@ -29,6 +30,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [serverOnline, setServerOnline] = useState(false);
   const [sysInfo, setSysInfo] = useState(null);
+  const [dashboardData, setDashboardData] = useState(null);
   const [settings, setSettings] = useState({ api_key:'', user_name:'Rao Alok Yadav', personality_mode:'sivi', gemini_model:'native_audio', gemini_voice:'Aoede', temperature:0.9 });
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [voices, setVoices] = useState([]);
@@ -54,6 +56,16 @@ export default function App() {
       iframeRef.current.contentWindow.postMessage({ type: 'amplitude', value: amplitude, personality: settings.personality_mode }, '*');
     }
   }, [amplitude, settings.personality_mode]);
+
+  // Track global mouse position for Acertinity cursor highlight
+  useEffect(() => {
+    const handleMouseMove = (e) => {
+      document.documentElement.style.setProperty('--mouse-x', `${e.clientX}px`);
+      document.documentElement.style.setProperty('--mouse-y', `${e.clientY}px`);
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, []);
 
   /* ── WebSocket ── */
   const connectWS = useCallback(() => {
@@ -106,10 +118,12 @@ export default function App() {
   useEffect(() => {
     connectWS();
     fetchStatus();
+    fetchAgents();
     fetchHistory();
     fetchSettings();
     fetchSystemInfo();
-    const iv = setInterval(() => { fetchStatus(); fetchHistory(); fetchSystemInfo(); }, 5000);
+    fetchDashboardData();
+    const iv = setInterval(() => { fetchStatus(); fetchAgents(); fetchHistory(); fetchSystemInfo(); fetchDashboardData(); }, 5000);
     const timeIv = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => {
       clearInterval(iv);
@@ -136,11 +150,25 @@ export default function App() {
     }
   };
 
+  const fetchAgents = async () => {
+    try {
+      const r = await axios.get(`${API}/agents`);
+      setAgentList(r.data.agents || []);
+    } catch (e) { console.error("fetchAgents error:", e); }
+  };
+
   const fetchSystemInfo = async () => {
     try {
       const r = await axios.get(`${API}/system-info`);
       setSysInfo(r.data);
     } catch (e) { console.error("fetchSystemInfo error:", e); }
+  };
+
+  const fetchDashboardData = async () => {
+    try {
+      const r = await axios.get(`${API}/dashboard-data`);
+      setDashboardData(r.data);
+    } catch (e) { console.error("fetchDashboardData error:", e); }
   };
 
   const fetchHistory = async () => {
@@ -268,7 +296,6 @@ export default function App() {
     // Battery & CPU from sysInfo
     const battery = sysInfo?.battery_percent >= 0 ? sysInfo.battery_percent : 100;
     const isCharging = sysInfo?.battery_plugged || false;
-    const cpuTemp = sysInfo?.cpu_percent ? Math.round(sysInfo.cpu_percent / 2 + 35) : 45; // Mock temp based on usage
 
     return (
       <div style={{ position: 'relative', flex:1, display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden' }}>
@@ -276,56 +303,63 @@ export default function App() {
         
         {/* Top Header */}
         <div style={{ position: 'relative', zIndex: 1, textAlign: 'center', paddingTop: '5px' }}>
-          <h1 style={{ fontSize: '2.2rem', fontWeight: 800, letterSpacing: '2px', background: 'linear-gradient(135deg, #e2e8f0, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', margin: 0 }}>SMART BRIEFINGS</h1>
-          <p style={{ fontSize: '1rem', color: '#cbd5e1', letterSpacing: '3px', marginTop: '2px', textTransform: 'uppercase' }}>Ab on hote hi, Sivi batayegi sab kuch.</p>
+          <h1 className="responsive-header">SMART BRIEFINGS</h1>
+          <p className="responsive-subheader">Ab on hote hi, Sivi batayegi sab kuch.</p>
+        </div>
+
+        {/* Acertinity UI Background with Cursor Highlight */}
+        <div className="acertinity-bg">
+          <div className="acertinity-grid"></div>
+          <div className="acertinity-grid-highlight"></div>
         </div>
 
         {/* Dashboard Grid */}
         <div className="dashboard-grid" style={{ position: 'relative', zIndex: 1, flex: 1 }}>
           
-          {/* Left Column */}
+          {/* Left Column (Weather & System) */}
           <div className="dashboard-column" style={{ justifyContent: 'center' }}>
             {/* Weather Card */}
-            <div className="glass-panel hover-glow" style={{ padding: '15px' }}>
-              <div style={{ fontSize: '11px', color: '#94a3b8', letterSpacing: '1px', marginBottom: '8px' }}>WEATHER & TEMPERATURE</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+            <div className="glass-panel hover-glow" style={{ padding: '25px', minHeight: '130px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+              <div style={{ fontSize: '12px', color: '#94a3b8', letterSpacing: '1px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <CloudRain size={16}/> WEATHER & LOCATION
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
                 <Sun size={32} color="#fbbf24" />
                 <div>
-                  <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#fff', lineHeight: 1 }}>28°C</div>
-                  <div style={{ color: '#cbd5e1', fontSize: '13px' }}>Partly Cloudy</div>
-                </div>
-              </div>
-              <div style={{ marginTop: '10px', fontSize: '12px', color: '#64748b' }}>
-                Feels like 31°C <br/> Humidity: 60%
-              </div>
-            </div>
-
-            {/* News Card */}
-            <div className="glass-panel hover-glow" style={{ padding: '15px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                <div style={{ fontSize: '11px', color: '#94a3b8', letterSpacing: '1px', display: 'flex', alignItems: 'center', gap:'8px' }}>
-                  <Newspaper size={12}/> IMPORTANT NEWS
-                </div>
-                <div style={{ background: 'linear-gradient(135deg, var(--theme-primary-start), var(--theme-primary-end))', padding: '2px 6px', borderRadius: '10px', fontSize: '9px', fontWeight: 'bold' }}>NEW</div>
-              </div>
-              <div style={{ color: '#fff', fontWeight: 600, fontSize: '13px', marginBottom: '8px' }}>Top Stories For You</div>
-              <ul style={{ color: '#cbd5e1', fontSize: '12px', paddingLeft: '15px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <li>Global tech stocks rally</li>
-                <li>New AI breakthrough by DeepMind</li>
-                <li>Local metro expansion begins</li>
-              </ul>
-            </div>
-
-            {/* Battery Card */}
-            <div className="glass-panel hover-glow" style={{ padding: '15px' }}>
-              <div style={{ fontSize: '11px', color: '#94a3b8', letterSpacing: '1px', marginBottom: '8px' }}>BATTERY STATUS</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                <Battery size={32} color={battery > 20 ? "#4ade80" : "#ef4444"} />
-                <div>
-                  <div style={{ fontSize: '1.8rem', fontWeight: 800, color: '#fff', lineHeight: 1 }}>{battery}%</div>
-                  <div style={{ color: isCharging ? '#4ade80' : '#cbd5e1', fontSize: '12px', display:'flex', alignItems:'center', gap:'4px', marginTop:'2px' }}>
-                    {isCharging ? <><Zap size={12}/> Charging</> : 'On Battery'}
+                  <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#fff', lineHeight: 1 }}>
+                    {dashboardData?.weather?.split(':')[0]?.split(',')[0]?.trim() || "Delhi"}
                   </div>
+                  <div style={{ color: '#cbd5e1', fontSize: '13px', marginTop: '4px' }}>
+                    {dashboardData?.weather?.split(':')[1]?.trim() || "Loading..."}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* System Info */}
+            <div className="glass-panel hover-glow" style={{ padding: '15px', display: 'flex', gap: '10px' }}>
+               <div style={{ flex: 1, background: 'rgba(15,23,42,0.4)', borderRadius: '10px', padding: '10px', textAlign: 'center' }}>
+                  <BatteryCharging size={18} color={dashboardData?.system?.is_charging ? "#34d399" : "#fbbf24"} style={{ margin: '0 auto 5px' }} />
+                  <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#e2e8f0' }}>{dashboardData?.system?.battery || 0}%</div>
+               </div>
+               <div style={{ flex: 1, background: 'rgba(15,23,42,0.4)', borderRadius: '10px', padding: '10px', textAlign: 'center' }}>
+                  <Cpu size={18} color="#f472b6" style={{ margin: '0 auto 5px' }} />
+                  <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#e2e8f0' }}>{dashboardData?.system?.cpu || 0}%</div>
+               </div>
+               <div style={{ flex: 1, background: 'rgba(15,23,42,0.4)', borderRadius: '10px', padding: '10px', textAlign: 'center' }}>
+                  <Wifi size={18} color="#60a5fa" style={{ margin: '0 auto 5px' }} />
+                  <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#e2e8f0' }}>{dashboardData?.system?.speed_down || 0}M</div>
+               </div>
+            </div>
+
+            {/* Time Card */}
+            <div className="glass-panel hover-glow" style={{ padding: '15px' }}>
+               <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                <Clock size={32} color="#c084fc" />
+                <div>
+                  <div style={{ fontSize: '10px', color: '#94a3b8', letterSpacing: '1px' }}>TIME & DAY</div>
+                  <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#fff', lineHeight: 1.1 }}>{timeString}</div>
+                  <div style={{ color: '#cbd5e1', fontSize: '11px' }}>{dayString}, {dateString}</div>
                 </div>
               </div>
             </div>
@@ -333,7 +367,6 @@ export default function App() {
 
           {/* Center Column (Sivi Chat) */}
           <div className="dashboard-center">
-
             
             {/* Live Chat Bubbles below Sivi */}
             <div style={{ width: '100%', maxWidth: '400px', marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -360,17 +393,9 @@ export default function App() {
             </div>
           </div>
 
-          {/* Right Column */}
+          {/* Right Column (News & Schedule) */}
           <div className="dashboard-column" style={{ justifyContent: 'center' }}>
             
-            {/* Start Your Day Smarter Text */}
-            <div style={{ padding: '0 5px' }}>
-              <div style={{ color: '#cbd5e1', fontSize: '12px', letterSpacing: '1px' }}>START YOUR DAY</div>
-              <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--theme-primary-start)', lineHeight: 1 }}>SMARTER</div>
-              <div style={{ color: '#94a3b8', fontSize: '12px', marginTop: '6px' }}>The moment Sivi wakes up, she briefs you.</div>
-              <div style={{ color: 'var(--theme-primary-end)', fontStyle: 'italic', fontSize: '16px', marginTop: '4px', textAlign: 'right', fontFamily: 'serif' }}>Just for You <Heart size={12} style={{display:'inline'}}/></div>
-            </div>
-
             {/* Schedule Card */}
             <div className="glass-panel hover-glow" style={{ padding: '15px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
@@ -380,47 +405,39 @@ export default function App() {
                   <div style={{ color: '#fff', fontSize: '13px', fontWeight: 'bold' }}>{dateString.toUpperCase()}</div>
                 </div>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '10px' }}>
-                <div style={{ display: 'flex', gap: '15px', fontSize: '12px' }}><span style={{color: '#cbd5e1', width: '55px'}}>10:00 AM</span> <span style={{color: '#fff'}}>Team Meeting</span></div>
-                <div style={{ display: 'flex', gap: '15px', fontSize: '12px' }}><span style={{color: '#cbd5e1', width: '55px'}}>01:00 PM</span> <span style={{color: '#fff'}}>Client Call</span></div>
-                <div style={{ display: 'flex', gap: '15px', fontSize: '12px' }}><span style={{color: '#cbd5e1', width: '55px'}}>04:30 PM</span> <span style={{color: '#fff'}}>Project Review</span></div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '10px', maxHeight: '100px', overflowY: 'auto' }}>
+                {Array.isArray(dashboardData?.calendar) && dashboardData.calendar.length > 0 ? (
+                  <div style={{ fontSize: '12px', color: '#cbd5e1', whiteSpace: 'pre-wrap' }}>
+                    {dashboardData.calendar.map(ev => `${ev.title} (${ev.time}${ev.location ? ' at ' + ev.location : ''})`).join('\n')}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '12px', color: '#64748b', fontStyle: 'italic' }}>No events scheduled for today.</div>
+                )}
               </div>
             </div>
 
-            {/* System Info Card */}
-            <div className="glass-panel hover-glow" style={{ padding: '15px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
-                <Monitor size={16} color="#60a5fa" />
-                <div style={{ fontSize: '11px', color: '#94a3b8', letterSpacing: '1px' }}>SYSTEM INFORMATION</div>
+            {/* News Card */}
+            <div className="glass-panel hover-glow" style={{ padding: '15px', flex: 1, display: 'flex', flexDirection: 'column' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <div style={{ fontSize: '11px', color: '#94a3b8', letterSpacing: '1px', display: 'flex', alignItems: 'center', gap:'8px' }}>
+                  <Newspaper size={14}/> IMPORTANT NEWS
+                </div>
+                <div style={{ background: 'linear-gradient(135deg, var(--theme-primary-start), var(--theme-primary-end))', padding: '2px 6px', borderRadius: '10px', fontSize: '9px', fontWeight: 'bold' }}>LIVE</div>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{color: '#cbd5e1'}}>CPU</span>
-                  <span style={{color: '#fff'}}>{cpuTemp}°C <span style={{color: '#4ade80', marginLeft: '5px'}}>Normal</span></span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{color: '#cbd5e1'}}>RAM</span>
-                  <span style={{color: '#fff'}}>{sysInfo?.ram_percent || 45}% <span style={{color: '#4ade80', marginLeft: '5px'}}>Normal</span></span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{color: '#cbd5e1'}}>Network</span>
-                  <span style={{color: '#4ade80'}}>Connected</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Time Card */}
-            <div className="glass-panel hover-glow" style={{ padding: '15px' }}>
-               <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-                <Clock size={32} color="#c084fc" />
-                <div>
-                  <div style={{ fontSize: '10px', color: '#94a3b8', letterSpacing: '1px' }}>TIME & DAY</div>
-                  <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#fff', lineHeight: 1.1 }}>{timeString}</div>
-                  <div style={{ color: '#cbd5e1', fontSize: '11px' }}>{dayString}, {dateString}</div>
-                </div>
+              
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', overflowY: 'auto', maxHeight: '150px', paddingRight: '5px' }}>
+                {Array.isArray(dashboardData?.news) && dashboardData.news.length > 0 ? (
+                  dashboardData.news.map((headline, idx) => (
+                    <div key={idx} style={{ background: 'rgba(15,23,42,0.4)', padding: '10px', borderRadius: '8px', fontSize: '12px', color: '#cbd5e1', borderLeft: `2px solid ${idx % 2 === 0 ? '#f87171' : '#60a5fa'}` }}>
+                      {headline}
+                    </div>
+                  ))
+                ) : (
+                  <div style={{ fontSize: '12px', color: '#64748b', fontStyle: 'italic' }}>Fetching latest headlines...</div>
+                )}
               </div>
             </div>
-
+            
           </div>
         </div>
 
@@ -487,79 +504,152 @@ export default function App() {
           </div>
         ))}
       </div>
-      <div style={{ display:'flex', gap:'12px' }}>
-        <input className="input-field" style={{flex: 1}} value={cmdInput} onChange={e => setCmdInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && sendCmd()} placeholder="Type a command (e.g. open notepad)..." />
-        <button className="btn-primary" onClick={sendCmd} disabled={loading}>Run</button>
+      <div style={{ display:'flex', gap:'12px', flexWrap: 'wrap' }}>
+        <input className="input-field" style={{flex: '1 1 200px'}} value={cmdInput} onChange={e => setCmdInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && sendCmd()} placeholder="Type a command (e.g. open notepad)..." />
+        <button className="btn-primary" style={{flex: '0 0 auto'}} onClick={sendCmd} disabled={loading}>Run</button>
       </div>
     </div>
   );
 
   const renderModules = () => (
+    <div className="glass-panel" style={{ flex:1, padding:'32px', overflowY:'auto' }}>
+      <div style={{ fontWeight:700, fontSize:'22px', marginBottom:'8px', display:'flex', alignItems:'center', gap:'10px' }}>
+        <Blocks size={24} color="#8b5cf6" /> Modules Core
+      </div>
+      <div style={{ color:'#94a3b8', fontSize:'14px', marginBottom:'24px' }}>
+        {modules.length} capability plugins currently loaded in the AI core.
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '16px' }}>
+        {modules.map((m, i) => {
+          const isActive = m.status === 'active';
+          const isWarning = m.status === 'no-key';
+          const col = isActive ? '#4ade80' : isWarning ? '#facc15' : '#64748b';
+          return (
+            <div key={i} className="module-card" style={{ display:'flex', flexDirection:'column', gap: '12px' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+                <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
+                  <div style={{ padding:'8px', background:'rgba(255,255,255,0.05)', borderRadius:'12px', display:'flex' }}>
+                    <Blocks size={18} color={col} />
+                  </div>
+                  <div style={{ fontWeight:600, fontSize:'15px', color: '#f8fafc' }}>{m.name}</div>
+                </div>
+                <div style={{ display:'flex', alignItems:'center', gap:'6px', background: 'rgba(0,0,0,0.3)', padding: '4px 10px', borderRadius: '12px', border:`1px solid ${col}20` }}>
+                  <div style={{ width:'8px', height:'8px', borderRadius:'50%', background:col, boxShadow: isActive || isWarning ? `0 0 10px ${col}` : 'none' }} />
+                  <span style={{ fontSize:'10px', color:col, textTransform:'uppercase', fontWeight:700, letterSpacing:'0.5px' }}>{m.status}</span>
+                </div>
+              </div>
+              <div style={{ color:'#64748b', fontSize:'12px', fontFamily:'monospace', background:'rgba(0,0,0,0.2)', padding:'6px 10px', borderRadius:'6px' }}>
+                {m.file}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  const renderAgents = () => (
     <div className="glass-panel" style={{ flex:1, padding:'24px', overflowY:'auto' }}>
-      <div style={{ fontWeight:700, fontSize:'18px', marginBottom:'16px' }}>Modules ({modules.length})</div>
-      {modules.map((m, i) => {
-        const col = m.status === 'active' ? '#4ade80' : m.status === 'no-key' ? '#facc15' : '#64748b';
-        return (
-          <div key={i} className="module-card" style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap: 'wrap', gap: '10px' }}>
-            <div style={{ minWidth: '150px' }}>
-              <div style={{ fontWeight:600, fontSize:'15px', color: '#f8fafc', marginBottom: '4px', wordBreak: 'break-word' }}>{m.name}</div>
-              <div style={{ color:'#64748b', fontSize:'12px', fontFamily:'monospace', wordBreak: 'break-all' }}>{m.file}</div>
+      <div style={{ fontWeight:700, fontSize:'18px', marginBottom:'16px' }}>Active Agents ({agentList.length})</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '15px' }}>
+        {agentList.map((a, i) => {
+          const col = a.status === 'active' ? '#4ade80' : '#ef4444';
+          return (
+            <div key={i} className="module-card" style={{ display:'flex', flexDirection:'column', gap: '8px' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                <div style={{ fontWeight:600, fontSize:'15px', color: '#f8fafc' }}>{a.name}</div>
+                <div style={{ display:'flex', alignItems:'center', gap:'6px', background: 'rgba(0,0,0,0.2)', padding: '4px 8px', borderRadius: '12px' }}>
+                  <div style={{ width:'8px', height:'8px', borderRadius:'50%', background:col, boxShadow: a.status==='active' ? `0 0 10px ${col}` : 'none' }} />
+                  <span style={{ fontSize:'10px', color:col, textTransform:'uppercase', fontWeight:700 }}>{a.status}</span>
+                </div>
+              </div>
+              <div style={{ color:'#a78bfa', fontSize:'11px', fontWeight:600, textTransform:'uppercase', letterSpacing:'1px' }}>{a.type}</div>
+              <div style={{ color:'#94a3b8', fontSize:'13px', lineHeight:'1.4' }}>{a.description}</div>
             </div>
-            <div style={{ display:'flex', alignItems:'center', gap:'8px', background: 'rgba(0,0,0,0.2)', padding: '6px 12px', borderRadius: '20px', flexShrink: 0 }}>
-              <div style={{ width:'10px', height:'10px', borderRadius:'50%', background:col, boxShadow: m.status==='active' ? `0 0 10px ${col}` : 'none' }} />
-              <span style={{ fontSize:'12px', color:col, textTransform:'uppercase', fontWeight:700 }}>{m.status}</span>
-            </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 
   const renderSettings = () => (
     <div className="glass-panel" style={{ flex:1, padding:'32px', overflowY:'auto' }}>
-      <div style={{ fontWeight:700, fontSize:'20px', marginBottom:'24px' }}>Settings</div>
+      <div style={{ fontWeight:700, fontSize:'22px', marginBottom:'24px', display:'flex', alignItems:'center', gap:'10px' }}>
+        <Settings size={24} color="#3b82f6" /> System Preferences
+      </div>
 
-      {[
-        { key:'api_key', label:'Gemini API Key', type:'password', hint:'AIza...' },
-        { key:'user_name', label:'Your Name', type:'text', hint:'Rao Alok Yadav' },
-      ].map(f => (
-        <div key={f.key} style={{ marginBottom:'20px' }}>
-          <label style={{ fontSize:'13px', color:'#94a3b8', display:'block', marginBottom:'8px', fontWeight: 500 }}>{f.label}</label>
-          <input className="input-field" type={f.type} value={settings[f.key] || ''} placeholder={f.hint}
-            onChange={e => { setSettings(p => ({ ...p, [f.key]: e.target.value })); setSettingsDirty(true); }}
-            style={{ width:'100%', boxSizing:'border-box' }} />
+      <div style={{ display:'flex', flexDirection:'column', gap:'24px', maxWidth:'800px' }}>
+        
+        {/* Personalization Section */}
+        <div style={{ background:'rgba(0,0,0,0.2)', padding:'24px', borderRadius:'16px', border:'1px solid rgba(255,255,255,0.05)' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'16px', color:'#f8fafc', fontWeight:600 }}>
+            <Heart size={18} color="#ec4899" /> Personalization
+          </div>
+          
+          <div>
+            <label style={{ fontSize:'13px', color:'#94a3b8', display:'block', marginBottom:'8px', fontWeight: 500 }}>Your Name</label>
+            <input className="input-field" type="text" value={settings.user_name || ''} placeholder="e.g. Rao Alok Yadav"
+              onChange={e => { setSettings(p => ({ ...p, user_name: e.target.value })); setSettingsDirty(true); }}
+              style={{ width:'100%', boxSizing:'border-box', background:'rgba(0,0,0,0.3)', border:'1px solid rgba(255,255,255,0.1)' }} />
+          </div>
         </div>
-      ))}
 
+        {/* AI Engine Section */}
+        <div style={{ background:'rgba(0,0,0,0.2)', padding:'24px', borderRadius:'16px', border:'1px solid rgba(255,255,255,0.05)' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'16px', color:'#f8fafc', fontWeight:600 }}>
+            <Zap size={18} color="#eab308" /> AI Engine Configuration
+          </div>
 
+          <div className="settings-grid" style={{ marginBottom:'20px' }}>
+            <div>
+              <label style={{ fontSize:'13px', color:'#94a3b8', display:'block', marginBottom:'8px', fontWeight: 500 }}>Gemini API Key</label>
+              <input className="input-field" type="password" value={settings.api_key || ''} placeholder="AIza..."
+                onChange={e => { setSettings(p => ({ ...p, api_key: e.target.value })); setSettingsDirty(true); }}
+                style={{ width:'100%', boxSizing:'border-box', background:'rgba(0,0,0,0.3)', border:'1px solid rgba(255,255,255,0.1)' }} />
+            </div>
+            
+            <div>
+              <label style={{ fontSize:'13px', color:'#94a3b8', display:'block', marginBottom:'8px', fontWeight: 500 }}>AI Model</label>
+              <select className="input-field" value={settings.gemini_model} onChange={e => { setSettings(p => ({ ...p, gemini_model: e.target.value })); setSettingsDirty(true); }}
+                style={{ width:'100%', boxSizing:'border-box', background:'rgba(0,0,0,0.3)', border:'1px solid rgba(255,255,255,0.1)' }}>
+                {models.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+              </select>
+            </div>
+          </div>
 
-      <div style={{ marginBottom:'20px' }}>
-        <label style={{ fontSize:'13px', color:'#94a3b8', display:'block', marginBottom:'8px', fontWeight: 500 }}>AI Model</label>
-        <select className="input-field" value={settings.gemini_model} onChange={e => { setSettings(p => ({ ...p, gemini_model: e.target.value })); setSettingsDirty(true); }}
-          style={{ width:'100%', boxSizing:'border-box' }}>
-          {models.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
-        </select>
+          <div className="settings-grid">
+            <div>
+              <label style={{ fontSize:'13px', color:'#94a3b8', display:'block', marginBottom:'8px', fontWeight: 500 }}>Voice Profile</label>
+              <select className="input-field" value={settings.gemini_voice} onChange={e => { setSettings(p => ({ ...p, gemini_voice: e.target.value })); setSettingsDirty(true); }}
+                style={{ width:'100%', boxSizing:'border-box', background:'rgba(0,0,0,0.3)', border:'1px solid rgba(255,255,255,0.1)' }}>
+                {voices.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+              </select>
+            </div>
+            
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px' }}>
+                <label style={{ fontSize:'13px', color:'#94a3b8', fontWeight: 500 }}>Temperature</label>
+                <span style={{color:'#60a5fa', fontWeight:700, fontSize:'13px'}}>{settings.temperature}</span>
+              </div>
+              <input type="range" min="0" max="1" step="0.1" value={settings.temperature}
+                onChange={e => { setSettings(p => ({ ...p, temperature: parseFloat(e.target.value) })); setSettingsDirty(true); }}
+                style={{ width:'100%', cursor:'pointer', marginTop:'4px' }} />
+            </div>
+          </div>
+        </div>
+        
+        {/* Actions */}
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginTop:'8px' }}>
+          <div style={{ fontSize:'13px', color:'#64748b', display:'flex', alignItems:'center', gap:'6px' }}>
+            <ShieldCheck size={16} /> Configuration persistently saved securely.
+          </div>
+          <button className="btn-primary" onClick={saveSettings} disabled={!settingsDirty} style={{ padding:'12px 32px', fontSize:'14px' }}>
+            Save Changes
+          </button>
+        </div>
+
       </div>
-
-      <div style={{ marginBottom:'20px' }}>
-        <label style={{ fontSize:'13px', color:'#94a3b8', display:'block', marginBottom:'8px', fontWeight: 500 }}>Voice</label>
-        <select className="input-field" value={settings.gemini_voice} onChange={e => { setSettings(p => ({ ...p, gemini_voice: e.target.value })); setSettingsDirty(true); }}
-          style={{ width:'100%', boxSizing:'border-box' }}>
-          {voices.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
-        </select>
-      </div>
-
-      <div style={{ marginBottom:'32px' }}>
-        <label style={{ fontSize:'13px', color:'#94a3b8', display:'block', marginBottom:'8px', fontWeight: 500 }}>Temperature: <span style={{color:'#60a5fa'}}>{settings.temperature}</span></label>
-        <input type="range" min="0" max="1" step="0.1" value={settings.temperature}
-          onChange={e => { setSettings(p => ({ ...p, temperature: parseFloat(e.target.value) })); setSettingsDirty(true); }}
-          style={{ width:'100%', cursor:'pointer' }} />
-      </div>
-
-      <button className="btn-primary" onClick={saveSettings} disabled={!settingsDirty}>
-        Save Configuration
-      </button>
-      <div style={{ fontSize:'12px', color:'#64748b', marginTop:'16px' }}>Settings are persistently saved to sivi_settings.json</div>
     </div>
   );
 
@@ -567,6 +657,7 @@ export default function App() {
     { id:'home', label:'Dashboard', icon: <LayoutDashboard size={18} /> },
     { id:'commands', label:'Commands', icon: <Terminal size={18} /> },
     { id:'modules', label:'Modules', icon: <Blocks size={18} /> },
+    { id:'agents', label:'Agents', icon: <Activity size={18} /> },
     { id:'settings', label:'Settings', icon: <Settings size={18} /> },
   ];
 
@@ -583,10 +674,10 @@ export default function App() {
     };
   };
 
-  const currentEmoji = <Bot size={22} />;
+  const currentEmoji = <Heart size={22} />;
 
   return (
-    <div className="app-wrapper" style={{ display:'flex', padding:'24px', gap:'24px', height:'100vh', width:'100vw', ...getThemeVars() }}>
+    <div className="app-wrapper" style={{ display:'flex', padding:'24px', gap:'24px', height:'100vh', width:'100%', ...getThemeVars() }}>
       
       {/* Toast Notification */}
       {toast && (
@@ -606,16 +697,16 @@ export default function App() {
       <main style={{ flex:1, display:'flex', flexDirection:'column', minHeight:0 }}>
         
         {/* Top Navbar */}
-        <div className="glass-panel" style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 24px', marginBottom:'20px', borderRadius:'20px', zIndex: 10, flexWrap: 'wrap', gap: '15px' }}>
+        <div className="glass-panel top-navbar">
           <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
             <div style={{ width:'32px', height:'32px', borderRadius:'10px', background:'linear-gradient(135deg, var(--theme-primary-start), var(--theme-primary-end))', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'16px', color: '#fff', flexShrink: 0 }}>{currentEmoji}</div>
             <h1 style={{ fontSize:'20px', fontWeight:800, letterSpacing:'2px', background:'linear-gradient(135deg, var(--theme-primary-start), var(--theme-primary-end))', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent', margin:0 }}>SIVI</h1>
           </div>
           
-          <nav style={{ display:'flex', gap:'10px', overflowX: 'auto', flexWrap: 'wrap', justifyContent: 'center' }}>
+          <nav className="nav-scroll-container">
             {navItems.map(n => (
-              <button key={n.id} onClick={() => setPage(n.id)} className={`nav-btn ${page === n.id ? 'active' : ''}`} style={{ padding:'8px 16px', borderRadius:'12px', width:'auto', display:'flex', alignItems:'center', gap:'8px', flexShrink: 0 }}>
-                {n.icon}<span>{n.label}</span>
+              <button key={n.id} onClick={() => setPage(n.id)} className={`nav-btn ${page === n.id ? 'active' : ''}`}>
+                {n.icon}<span className="nav-label">{n.label}</span>
               </button>
             ))}
           </nav>
@@ -629,7 +720,7 @@ export default function App() {
         </div>
 
         <div style={{ display: 'flex', gap: '24px', flex: 1, height: '100%', overflow: 'hidden' }}>
-          {{ home: renderHome, commands: renderCommands, modules: renderModules, settings: renderSettings }[page]?.()}
+          {{ home: renderHome, commands: renderCommands, modules: renderModules, settings: renderSettings, agents: renderAgents }[page]?.()}
         </div>
       </main>
     </div>

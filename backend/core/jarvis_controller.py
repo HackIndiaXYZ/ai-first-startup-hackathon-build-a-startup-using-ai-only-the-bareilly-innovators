@@ -1,5 +1,5 @@
 """
-TITAN AI — Jarvis Controller (The Brain)
+SIVI AI — Jarvis Controller (The Brain)
 Parses all commands and routes them to the correct module.
 """
 
@@ -240,7 +240,7 @@ class JarvisController:
                 return calendar_manager.get_today_events() if _calendar_available else "Calendar is offline."
             if t == "CREATE_EVENT":
                 if not p.get("title"): return "What event would you like to schedule?"
-                return calendar_manager.create_event(p.get("title")) if _calendar_available else "Calendar offline."
+                return calendar_manager.quick_add_event(p.get("title")) if _calendar_available else "Calendar offline."
 
             # ── Medical ───────────────────────────────────────────
             if t == "MEDICAL_ADVICE":
@@ -269,6 +269,7 @@ class JarvisController:
             if t == "BROWSER_READ_PAGE": return browser_controller.read_current_page() if _browser_available else "Browser offline."
             if t == "BROWSER_SCROLL":    return browser_controller.scroll(p.get("direction", "down")) if _browser_available else "Browser offline."
             if t == "BROWSER_FULLSCREEN":return browser_controller.toggle_fullscreen() if _browser_available else "Browser offline."
+            if t == "BROWSER_STATUS":    return browser_controller.list_tabs() if _browser_available else "Browser offline."
 
             # ── Files ─────────────────────────────────────────────
             if t == "CREATE_FILE":   return file_manager.create_file(p.get("name"))
@@ -306,6 +307,25 @@ class JarvisController:
             if t == "DEV_OPEN_EDITOR":  return dev_tools.open_in_editor(p.get("filename"))
             if t == "DEV_CLOSE_EDITOR": return dev_tools.close_current_file()
 
+            # ── MCP Routing ───────────────────────────────────────
+            if t == "MCP_CALL":
+                from mcp_router import mcp_router
+                import asyncio
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # We're in a thread via asyncio.to_thread; use run_coroutine_threadsafe
+                        import concurrent.futures
+                        future = asyncio.run_coroutine_threadsafe(
+                            mcp_router.call_tool(p.get("server"), p.get("tool"), p.get("args")),
+                            loop
+                        )
+                        return future.result(timeout=30)
+                    else:
+                        return loop.run_until_complete(mcp_router.call_tool(p.get("server"), p.get("tool"), p.get("args")))
+                except Exception as e:
+                    return f"MCP call failed: {e}"
+
             return f"Command '{t}' is not fully mapped in the controller."
 
         except Exception as e:
@@ -319,7 +339,7 @@ class JarvisController:
             print(f"\n⏰ TIMER FIRED: {label}")
             try:
                 from plyer import notification
-                notification.notify(title="⏰ TITAN Timer", message=f"{label} timer is done!", timeout=10)
+                notification.notify(title="⏰ SIVI Timer", message=f"{label} timer is done!", timeout=10)
             except Exception as e:
                 pass
             # Send a system tray beep as fallback

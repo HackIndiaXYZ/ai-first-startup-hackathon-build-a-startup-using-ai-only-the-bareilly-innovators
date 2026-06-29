@@ -137,16 +137,11 @@ class AudioEngine:
                     if self.on_amplitude_changed:
                         self.on_amplitude_changed(rms)
 
-                    # Echo suppression & Smart Barge-in
+                    # Only send mic data to callback if not muted
+                    # Note: Echo suppression is handled entirely in bridge_server.on_mic_chunk
                     if not self._muted:
                         if self.on_audio_chunk:
-                            # Echo suppression: If Sivi is speaking, raise threshold to 0.05 to block speaker noise.
-                            # Otherwise use 0.002 to catch quiet user speech.
-                            threshold = 0.05 if self._speaking else 0.002
-                            if rms < threshold:
-                                self.on_audio_chunk(b'\x00' * len(pcm_bytes))
-                            else:
-                                self.on_audio_chunk(pcm_bytes)
+                            self.on_audio_chunk(pcm_bytes)
         except Exception as e:
             logger.error(f"Mic error (sounddevice): {e}")
         finally:
@@ -177,11 +172,7 @@ class AudioEngine:
 
                 if not self._muted:
                     if self.on_audio_chunk:
-                        threshold = 0.05 if self._speaking else 0.002
-                        if rms < threshold:
-                            self.on_audio_chunk(b'\x00' * len(pcm_bytes))
-                        else:
-                            self.on_audio_chunk(pcm_bytes)
+                        self.on_audio_chunk(pcm_bytes)
 
             stream.stop_stream()
             stream.close()

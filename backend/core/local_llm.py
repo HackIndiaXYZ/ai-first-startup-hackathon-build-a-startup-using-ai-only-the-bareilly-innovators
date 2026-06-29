@@ -1,5 +1,5 @@
 """
-TITAN AI  Local LLM Module (Ollama)
+SIVI AI  Local LLM Module (Ollama)
 Provides offline AI responses as a fallback to Gemini.
 Requires: Ollama installed + pip install ollama
 """

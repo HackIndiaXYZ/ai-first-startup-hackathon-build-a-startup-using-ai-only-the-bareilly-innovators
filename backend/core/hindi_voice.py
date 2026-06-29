@@ -1,5 +1,5 @@
 """
-TITAN AI — Hindi Voice Module
+SIVI AI — Hindi Voice Module
 Auto-detects Hindi/Hinglish input and translates to English action keywords.
 """
 

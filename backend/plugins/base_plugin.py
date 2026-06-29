@@ -1,5 +1,5 @@
 """
-TITAN AI  Base Plugin Abstract Class
+SIVI AI  Base Plugin Abstract Class
 All plugins must extend this class.
 """
 

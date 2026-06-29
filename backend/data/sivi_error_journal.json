@@ -1,0 +1,26 @@
+[
+  {
+    "timestamp": "2026-06-29T14:31:15.122041",
+    "epoch": 1782723675.122041,
+    "user_text": "\u0920\u0940\u0915 \u0939\u0948 \u092c\u094d\u0930\u093e\u0909\u0930 \u092e\u0947\u0902 \u0915\u093f\u0924\u0928\u0940 \u091f\u093e\u0907\u092a\u094d\u0938 \u0916\u0941\u0932\u0940 \u0939\u0941\u0908 \u0939\u0948",
+    "cmd_tag": "browser status",
+    "cmd_type": "PARSE_FAIL",
+    "error_msg": "The command tag `[CMD: browser status]` was not recognized by the parser.",
+    "category": "PARSE_FAIL",
+    "stack_trace": "",
+    "resolved": false,
+    "lesson_extracted": false
+  },
+  {
+    "timestamp": "2026-06-29T14:31:24.144825",
+    "epoch": 1782723684.1448255,
+    "user_text": "",
+    "cmd_tag": "get open tabs",
+    "cmd_type": "PARSE_FAIL",
+    "error_msg": "The command tag `[CMD: get open tabs]` was not recognized by the parser.",
+    "category": "PARSE_FAIL",
+    "stack_trace": "",
+    "resolved": false,
+    "lesson_extracted": false
+  }
+]

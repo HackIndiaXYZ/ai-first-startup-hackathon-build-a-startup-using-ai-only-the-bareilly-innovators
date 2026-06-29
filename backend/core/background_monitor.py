@@ -10,7 +10,7 @@ BRIDGE_URL = os.getenv("BRIDGE_URL", "http://localhost:8000")
 
 class BackgroundMonitor:
     """
-    Proactive Event Monitor for TITAN.
+    Proactive Event Monitor for SIVI.
     Runs continuously in the background and sends events to Gemini Live
     when certain thresholds are met, making Sivi a proactive assistant.
     """

@@ -1,5 +1,5 @@
 """
-TITAN — Wake Word Detection
+SIVI — Wake Word Detection
 Listens for wake word, then sends voice to the Gemini Live bridge server.
 Uses HTTP POST to /voice/send-text to integrate with the running bridge server.
 """
@@ -44,12 +44,14 @@ class WakeWordListener:
         self.recognizer.dynamic_energy_threshold = True
         self._cooldown = False
 
-    def _bridge_connected(self) -> bool:
+    def _get_bridge_status(self) -> dict:
         try:
-            r = requests.get(f"{BRIDGE_URL}/health", timeout=2)
-            return r.status_code == 200
+            r = requests.get(f"{BRIDGE_URL}/status", timeout=2)
+            if r.status_code == 200:
+                return r.json()
         except Exception:
-            return False
+            pass
+        return {}
 
     def _speak_local(self, text: str):
         """Fallback TTS using pyttsx3 when bridge is offline."""
@@ -102,7 +104,16 @@ class WakeWordListener:
                 pass
 
             # Check if bridge server is running
-            if self._bridge_connected():
+            bridge_status = self._get_bridge_status()
+            if bridge_status.get("status") == "online":
+                
+                # If Gemini is ALREADY connected, we do not need to send a text nudge.
+                # Gemini is already listening to the microphone via audio_engine!
+                if bridge_status.get("sivi_state", {}).get("is_connected") == True:
+                    print(" Sivi is already listening actively. Skipping text nudge.")
+                    # Provide brief visual/audio feedback that we heard them
+                    return
+                
                 # Get the currently active window to give Sivi context
                 context = "The user woke you up. Just listen carefully to their command."
                 try:
@@ -116,22 +127,14 @@ class WakeWordListener:
                 except Exception:
                     pass
 
-                # Bridge is online — send a nudge so Gemini starts listening
+                # Bridge is online but voice isn't active — send a nudge so Gemini starts listening
                 wake_msg = f"[WAKE_WORD_ACTIVATED: User just woke you up. {context}]"
                 result = self._send_to_bridge(wake_msg)
                 
-                # If Gemini Live session isn't active yet, boot it up first
+                # If Gemini Live session isn't active yet, warn local console instead of auto-booting
                 if result and result.get("error"):
-                    print(f" Gemini not connected: {result.get('error')}. Booting Sivi...")
-                    try:
-                        requests.post(f"{BRIDGE_URL}/voice/start", timeout=15)
-                        import time
-                        time.sleep(3)  # Give Gemini a moment to connect
-                        # Re-send the wake word nudge now that Gemini should be live
-                        self._send_to_bridge(wake_msg)
-                        print(" Sivi booted and wake word nudge re-sent.")
-                    except Exception as e:
-                        print(f" Failed to boot Sivi: {e}")
+                    print(f" Gemini not connected: {result.get('error')}. Auto-boot disabled. Please start Sivi manually from the dashboard.")
+                    self._speak_local("Sivi is offline. Please start the system from the dashboard.")
                 elif result and result.get("status") == "sent":
                     print(" Bridge is online and Gemini is active. Sivi will respond via real voice.")
                 else:
@@ -183,8 +186,8 @@ class WakeWordListener:
                 print(f" Speech recognition error: {e}")
 
     def run(self):
-        bridge_status = "online" if self._bridge_connected() else "OFFLINE (local fallback active)"
-        print(f"\n TITAN Wake Word Listener starting...")
+        bridge_status = "online" if self._get_bridge_status().get("status") == "online" else "OFFLINE (local fallback active)"
+        print(f"\n SIVI Wake Word Listener starting...")
         print(f"   Bridge server: {BRIDGE_URL} [{bridge_status}]")
         print(f"   Listening for wake word / claps...\n")
 

@@ -45,6 +45,8 @@ from core.command_parser import parse_command
 from core.personality import build_system_prompt, get_greeting, get_personality_list, PERSONALITIES
 from core.jarvis_controller import controller
 from core.self_learning import self_learning
+from core.always_on_agents import agents
+from core.agent_orchestrator import orchestrator
 
 # ══════════════════════════════════════════════════════════════════
 # GLOBAL STATE
@@ -211,7 +213,9 @@ def on_turn_complete(user_text: str, sivi_text: str):
         # Find all command tags (e.g. [CMD: open notepad] [CMD: snap to left])
         matches = re.finditer(r'\[CMD:\s*(.*?)\]', sivi_text, re.IGNORECASE)
         for match in matches:
-            extracted_cmds.append(match.group(1).strip())
+            cmd_val = match.group(1).strip()
+            if cmd_val not in extracted_cmds:
+                extracted_cmds.append(cmd_val)
         # Remove the command tags from the visible text
         sivi_text = re.sub(r'\[CMD:\s*.*?\]', '', sivi_text, flags=re.IGNORECASE).strip()
 
@@ -277,8 +281,27 @@ def on_turn_complete(user_text: str, sivi_text: str):
                     continue
                     
                 logger.info(f"Parsed command from tag: {cmd.type} -> {cmd.params}")
-                
+
+                # ── SWITCH_MODE: Handle inline here since it changes bridge_server settings ──
+                if cmd.type == "SWITCH_MODE":
+                    new_mode = cmd.params.get("mode", "sivi")
+                    settings["personality_mode"] = new_mode
+                    save_settings(settings)
+                    all_feedback.append(f"SWITCH_MODE result: Personality switched to '{new_mode}' mode. Acknowledge this to the user warmly.")
+                    logger.info(f"Personality switched to: {new_mode}")
+                    continue
+
                 try:
+                    # Check if AgentOrchestrator should handle this (RAG, complex logic)
+                    async def async_speak(res_text):
+                        if res_text and gemini_client and gemini_client.is_connected:
+                            await gemini_client.send_text(f"System result for the user: {res_text}")
+
+                    is_handled = await orchestrator.route_task(extracted_cmd, async_speak)
+                    if is_handled:
+                        logger.info(f"Command routed to background agent: {extracted_cmd}")
+                        continue
+                        
                     # Offload blocking execution to a separate thread with a failsafe timeout
                     result = None
                     error_occurred = False
@@ -381,12 +404,14 @@ def on_turn_complete(user_text: str, sivi_text: str):
                             "TAB_NEXT", "TAB_PREV", "TAB_NEW", "TAB_CLOSE",
                             "WIFI_ON", "WIFI_OFF", "BLUETOOTH_ON", "BLUETOOTH_OFF",
                             "REMEMBER", "FORGET_ALL", "SEND_EMAIL", "SEND_WHATSAPP", "WHATSAPP_READ_CHAT",
-                            "PLAY_YOUTUBE", "PLAY_SPOTIFY",
+                            "PLAY_YOUTUBE", "PLAY_SPOTIFY", "LOCK_SCREEN", "VOLUME_UP", "VOLUME_DOWN",
+                            "MUTE", "BRIGHTNESS_UP", "BRIGHTNESS_DOWN", "MEDIA_PLAY_PAUSE",
+                            "MEDIA_NEXT", "MEDIA_PREV",
                         ]
                         
                         if cmd.type in speak_commands or cmd.type in dev_commands:
                             if cmd.type == "ANALYZE_EMOTION":
-                                all_feedback.append(f"Visual analysis result: '{result}'. Deeply analyze their state in your persona.")
+                                all_feedback.append(f"Visual analysis result: '{result}'. Based on this emotion, respond with genuine affection, empathy, and care in your persona. Be supportive.")
                             elif cmd.type == "DESCRIBE_SCENE":
                                 all_feedback.append(f"Photo analysis: '{result}'.")
                             elif cmd.type in dev_commands:
@@ -413,7 +438,7 @@ def on_turn_complete(user_text: str, sivi_text: str):
 
             # Send single batched feedback back to Gemini
             if all_feedback and gemini_client and gemini_client.is_connected:
-                final_prompt = "System Actions Results:\n- " + "\n- ".join(all_feedback) + "\nConvey results concisely to the user."
+                final_prompt = "System Actions Results:\n- " + "\n- ".join(all_feedback) + "\nConvey results affectionately to the user. CRITICAL RULE: DO NOT output any [CMD: ...] tags in your response to this result."
                 if has_error:
                     final_prompt += "\nSome commands failed. Think about WHY and explain concisely. If you can fix it with a different [CMD: ...] tag, do it now."
                 await gemini_client.send_text(final_prompt)
@@ -450,6 +475,10 @@ def on_mic_chunk(pcm_bytes: bytes):
     This is called from a background audio thread, so we must use
     run_coroutine_threadsafe for thread-safe async dispatch.
     """
+    # Prevent Sivi from hearing her own voice through the speakers (Acoustic Echo)
+    if audio_engine and audio_engine.is_speaking:
+        return
+
     if gemini_client and gemini_client.is_connected and _main_loop is not None:
         try:
             asyncio.run_coroutine_threadsafe(
@@ -473,10 +502,17 @@ async def start_voice_session(is_switch: bool = False):
     """Start the Gemini Live WebSocket + Audio Engine."""
     global gemini_client, audio_engine, voice_task
 
-    api_key = settings.get("api_key", "")
-    if not api_key:
-        logger.error("No API key configured!")
-        return {"error": "No API key. Set it in Settings."}
+    # Validate: pool must have at least one working key
+    try:
+        from core.gemini_key_pool import key_pool
+        if key_pool.key_count == 0:
+            return {"error": "No Gemini API key configured. Set GEMINI_API_KEY in .env"}
+    except Exception:
+        # Pool unavailable — fall back to settings api_key (legacy path)
+        api_key = settings.get("api_key", "")
+        if not api_key:
+            logger.error("No API key configured!")
+            return {"error": "No API key. Set GEMINI_API_KEY in backend/.env"}
 
     # Resolve model string
     model_key = settings.get("gemini_model", "native_audio")
@@ -497,9 +533,9 @@ async def start_voice_session(is_switch: bool = False):
     # Stop existing session if any
     await stop_voice_session()
 
-    # Create Gemini client
+    # Create Gemini client — key_pool handles key selection internally
     gemini_client = GeminiLiveClient(
-        api_key=api_key,
+        # api_key is intentionally omitted — pool provides the key
         model=model_str,
         voice=voice,
         system_prompt=system_prompt,
@@ -579,7 +615,7 @@ async def _send_greeting_delayed(greeting: str, is_switch: bool = False):
             return
 
         # Send greeting IMMEDIATELY — don't wait for camera/screen
-        greeting_prompt = f"System: The system has just booted up. Greet the user out loud immediately and concisely. Your name is Sivi. Use this baseline greeting style: '{greeting}'. Keep it very short, 1 sentence max."
+        greeting_prompt = f"System: The system has just booted up. Greet the user out loud immediately. Your name is Sivi. Use this baseline greeting style based on the time: '{greeting}'. ALSO, explicitly tell the user that you have deeply and fully checked all their system notifications properly. Keep it natural, caring, and concise (2 sentences max)."
         await gemini_client.send_text(greeting_prompt)
         sivi_state["orb_state"] = "thinking"
         sivi_state["status_text"] = "Soch rahi hoon..."
@@ -652,10 +688,14 @@ async def lifespan(app: FastAPI):
     notif_task = asyncio.create_task(notification_worker())
     health_task = asyncio.create_task(system_health_worker())
     
+    # Start always-on background agents
+    agents.start(controller)
+    
     yield
     
     notif_task.cancel()
     health_task.cancel()
+    agents.stop()
     logger.info("Shutting down Sivi...")
     await stop_voice_session()
 
@@ -763,6 +803,22 @@ async def health_check():
     }
 
 
+@app.get("/key-pool-status")
+async def key_pool_status():
+    """Real-time health of all Gemini API keys. Shown in the frontend dashboard."""
+    try:
+        from core.gemini_key_pool import key_pool
+        stats = key_pool.stats()
+        active_keys = sum(1 for s in stats if s["status"] == "active")
+        return {
+            "key_count": key_pool.key_count,
+            "active_keys": active_keys,
+            "keys": stats,
+        }
+    except Exception as exc:
+        return {"error": str(exc), "keys": []}
+
+
 @app.get("/status")
 async def get_status():
     return {
@@ -795,6 +851,77 @@ async def get_system_info():
         "cpu_percent": psutil.cpu_percent(interval=0),
         "time": datetime.now().strftime("%I:%M %p"),
         "date": datetime.now().strftime("%d %b %Y"),
+    }
+
+
+_last_net_bytes = 0
+_last_net_time = 0
+
+@app.get("/dashboard-data")
+async def get_dashboard_data():
+    global _last_net_bytes, _last_net_time
+    
+    # 1. System Info (CPU, Battery, Network Speed)
+    try:
+        battery = psutil.sensors_battery()
+        battery_percent = battery.percent if battery else 100
+        is_charging = battery.power_plugged if battery else True
+    except Exception:
+        battery_percent = 100
+        is_charging = True
+
+    cpu = psutil.cpu_percent(interval=0)
+    
+    # Network Speed Calculation
+    try:
+        net_io = psutil.net_io_counters()
+        current_bytes = net_io.bytes_recv + net_io.bytes_sent
+        current_time = time.time()
+        speed_mbps = 0.0
+        
+        if _last_net_time > 0:
+            time_diff = current_time - _last_net_time
+            bytes_diff = current_bytes - _last_net_bytes
+            if time_diff > 0:
+                speed_mbps = (bytes_diff / time_diff) * 8 / 1_000_000
+                
+        _last_net_bytes = current_bytes
+        _last_net_time = current_time
+    except Exception:
+        speed_mbps = 0.0
+
+    # 2. Weather
+    try:
+        from core.web_scraper import web_scraper
+        weather = await asyncio.to_thread(web_scraper.get_weather, "")
+    except Exception:
+        weather = "Weather unavailable."
+
+    # 3. Calendar
+    try:
+        from core.calendar_manager import calendar_manager
+        calendar_events = await asyncio.to_thread(calendar_manager.get_today_events_list)
+    except Exception:
+        calendar_events = []
+
+    # 4. News
+    try:
+        from core.gnews import news_fetcher
+        articles = await asyncio.to_thread(news_fetcher.get_top_headlines_raw, "general", 5)
+        news_list = [a.get("title", "") for a in articles if a.get("title")]
+    except Exception:
+        news_list = ["News unavailable."]
+
+    return {
+        "weather": weather,
+        "system": {
+            "battery": int(battery_percent),
+            "is_charging": is_charging,
+            "cpu": int(cpu),
+            "speed_down": round(speed_mbps, 1)
+        },
+        "calendar": calendar_events,
+        "news": news_list
     }
 
 
@@ -924,6 +1051,91 @@ async def update_settings(req: SettingsUpdateRequest):
 async def get_modules():
     return {"modules": controller.get_module_status()}
 
+@app.get("/agents")
+async def get_agents():
+    # Dynamically verify live status of background agents
+    try:
+        from core.continuous_observer import continuous_observer
+        observer_active = continuous_observer.running
+        observer_status = "active" if observer_active else "standby"
+    except ImportError:
+        observer_status = "offline (missing 'mss' or 'cv2')"
+
+    from core.notification_monitor import _WINSDK_AVAILABLE
+    
+    # Check separate processes using psutil
+    bg_monitor_active = False
+    wake_word_active = False
+    
+    for proc in psutil.process_iter(['name', 'cmdline']):
+        try:
+            cmdline = proc.info.get('cmdline') or []
+            cmd_str = " ".join(cmdline).lower()
+            if 'python' in proc.info.get('name', '').lower() or 'python' in cmd_str:
+                if 'background_monitor.py' in cmd_str:
+                    bg_monitor_active = True
+                if 'wake_word_detection.py' in cmd_str:
+                    wake_word_active = True
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            pass
+
+    return {"agents": [
+        {
+            "name": "Wake Word Listener",
+            "description": "Listens for voice activation or double-claps continuously.",
+            "status": "active" if wake_word_active else "inactive",
+            "type": "Always On"
+        },
+        {
+            "name": "Background Monitor",
+            "description": "Proactively monitors system battery and hardware states.",
+            "status": "active" if bg_monitor_active else "inactive",
+            "type": "Always On"
+        },
+        {
+            "name": "HackerNews Monitor",
+            "description": "Polls HackerNews and alerts user on relevant stories.",
+            "status": "active" if agents._running else "inactive",
+            "type": "Always On"
+        },
+        {
+            "name": "Agent Orchestrator",
+            "description": "Routes complex tasks (RAG, Code) to LLM background threads.",
+            "status": "active",
+            "type": "Orchestrator"
+        },
+        {
+            "name": "Notification Monitor",
+            "description": "Watches Windows notifications seamlessly.",
+            "status": "active" if _WINSDK_AVAILABLE else "offline",
+            "type": "Background Task"
+        },
+        {
+            "name": "Continuous Observer",
+            "description": "Watches screen continuously using local Ollama vision.",
+            "status": observer_status,
+            "type": "Vision Agent"
+        },
+        {
+            "name": "Self Learning Engine",
+            "description": "Observes user commands to improve future responses.",
+            "status": "active",
+            "type": "Learning Agent"
+        },
+        {
+            "name": "RAG Knowledge Base",
+            "description": "Ingests documents into ChromaDB for semantic search.",
+            "status": "active",
+            "type": "Vector DB"
+        },
+        {
+            "name": "Proactive Vision",
+            "description": "Analyzes webcam and screen context during idle times.",
+            "status": "active",
+            "type": "Background Task"
+        }
+    ]}
+
 
 @app.get("/learning")
 async def get_learning_stats():
@@ -1014,6 +1226,11 @@ if os.path.exists(FRONTEND_DIR):
     app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
 else:
     logger.warning("Frontend dist directory not found. Please run 'npm run build' in the frontend folder.")
+
+# ══════════════════════════════════════════════════════════════════
+# BACKGROUND AGENTS
+# ══════════════════════════════════════════════════════════════════
+# Now handled inside lifespan function
 
 # ══════════════════════════════════════════════════════════════════
 # ENTRY POINT

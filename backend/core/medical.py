@@ -38,7 +38,7 @@ class MedicalAssistant:
 
         print(f" Consulting Medical AI for: {query}")
         prompt = f"""
-        You are a helpful AI health advisor named TITAN Medical.
+        You are a helpful AI health advisor named SIVI Medical.
         The user is reporting the following symptom or health query: '{query}'
         Provide brief, general advice. You can understand both Hindi and English.
         IMPORTANT: Always start with a clear disclaimer that you are not a doctor

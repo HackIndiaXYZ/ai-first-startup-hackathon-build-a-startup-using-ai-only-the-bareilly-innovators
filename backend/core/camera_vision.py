@@ -25,7 +25,7 @@ def _get_api_key():
 
 class CameraVision:
     def __init__(self):
-        self.model_name = 'gemini-flash-latest'
+        self.model_name = 'gemini-2.5-flash'
 
     def _get_client(self):
         if not _genai_available: return None

@@ -1,5 +1,5 @@
 """
-TITAN AI  Screen Reader Module
+SIVI AI  Screen Reader Module
 Captures screen and analyzes with Gemini AI or OCR.
 """
 
@@ -26,7 +26,7 @@ def _get_api_key():
 
 class ScreenReader:
     def __init__(self):
-        self.model_name = "gemini-flash-latest"
+        self.model_name = "gemini-2.0-flash"
 
     def _get_client(self):
         if not genai: return None

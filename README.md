@@ -1,6 +1,6 @@
-# 🌌 TITAN / Sivi AI Voice Assistant
+# 🌌 SIVI / Sivi AI Voice Assistant
 
-A powerful, ultra-responsive, real-time Voice AI Assistant built for Windows PC. TITAN (Sivi) leverages the **Google Gemini Live API (Native Audio via WebSockets)** to provide instantaneous, human-like voice conversations, system control, and visual intelligence.
+A powerful, ultra-responsive, real-time Voice AI Assistant built for Windows PC. SIVI (Sivi) leverages the **Google Gemini Live API (Native Audio via WebSockets)** to provide instantaneous, human-like voice conversations, system control, and visual intelligence.
 
 ## ✨ Key Features
 
@@ -10,7 +10,7 @@ A powerful, ultra-responsive, real-time Voice AI Assistant built for Windows PC.
 - **🎭 4 Dynamic Personalities:** Switch on the fly between *GF Mode 💖*, *Professional Mode 💼*, *Assistant Mode 🤖*, and *Developer Mode 💻*.
 - **🌐 Bilingual (Hinglish/English):** Seamlessly understands and speaks a natural mix of Hindi and English.
 - **🔌 Extensible Plugin System:** Includes built-in plugins for Live Weather, Calculator, Google News, Spotify, and Google Calendar.
-- **⚡ Modern UI:** A beautiful React + Vite frontend dashboard to monitor system stats, view chat history, and configure AI settings.
+- **⚡ Smart Briefings Dashboard:** A deeply responsive, beautiful React + Vite frontend dashboard that dynamically renders real-time weather, system health, internet speeds, live news, and your daily schedule.
 
 ---
 
@@ -63,9 +63,9 @@ SPOTIPY_REDIRECT_URI=http://localhost:8888/callback
 ## 🏃‍♂️ Running the Assistant
 
 **Easiest Way (Windows):**
-Simply double-click the **`start_titan.bat`** file located in the root directory. 
+Simply double-click the **`start_sivi.bat`** file located in the root directory. 
 This smart script will automatically:
-1. Search for and terminate any lingering or frozen TITAN processes from your last session.
+1. Search for and terminate any lingering or frozen SIVI processes from your last session.
 2. Free up ports 8000 and 5173 to prevent socket bind errors.
 3. Launch the Backend, Wake Word Listener, and Frontend in clean, separate windows.
 
