@@ -9,33 +9,15 @@ except ImportError:
     _genai_available = False
 
 
-def _get_api_key():
-    key = os.getenv("GEMINI_API_KEY")
-    if key: return key
-    try:
-        settings_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "sivi_settings.json")
-        with open(settings_path, "r") as f:
-            return json.load(f).get("api_key")
-    except Exception:
-        return None
-
+from genai_runner import run_with_key_pool
 
 class MedicalAssistant:
     def __init__(self):
-        self.model_name = 'gemini-flash-latest'
+        self.model_name = 'gemini-2.0-flash' # upgraded model since flash-latest was deprecated
         if not _genai_available:
             print(" google.genai not installed. Medical AI offline.")
 
-    def _get_client(self):
-        if not _genai_available: return None
-        key = _get_api_key()
-        return genai.Client(api_key=key) if key else None
-
     def get_advice(self, query: str) -> str:
-        client = self._get_client()
-        if not client:
-            return "Medical AI offline. Missing Gemini API key or package."
-
         print(f" Consulting Medical AI for: {query}")
         prompt = f"""
         You are a helpful AI health advisor named SIVI Medical.
@@ -48,10 +30,16 @@ class MedicalAssistant:
         """
 
         try:
-            response = client.models.generate_content(
-                model=self.model_name,
-                contents=prompt
-            )
+            def make_call(client):
+                return client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt
+                )
+            response = run_with_key_pool(make_call)
+            
+            if response is None:
+                return "Failed to get medical advice due to quota limits."
+                
             # Strip markdown and newlines for clean voice output
             text = response.text.replace("*", "").replace("#", "").replace("\n", " ")
             return " ".join(text.split())  # Collapse multiple spaces

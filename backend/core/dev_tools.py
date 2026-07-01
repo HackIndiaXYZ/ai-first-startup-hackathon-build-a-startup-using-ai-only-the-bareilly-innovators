@@ -15,24 +15,14 @@ try:
 except ImportError:
     _genai_available = False
 
-def _get_api_key():
-    key = os.getenv("GEMINI_API_KEY")
-    if key: return key
-    try:
-        settings_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "sivi_settings.json")
-        with open(settings_path, "r") as f:
-            return json.load(f).get("api_key")
-    except Exception:
-        return None
+from genai_runner import run_with_key_pool
 
 class DeveloperTools:
     def __init__(self):
         self.model_name = 'gemini-2.0-flash'
 
     def _get_client(self):
-        if not _genai_available: return None
-        key = _get_api_key()
-        return genai.Client(api_key=key) if key else None
+        pass
 
     def run_command(self, cmd: str) -> str:
         """Execute a raw terminal command and return output."""
@@ -131,10 +121,16 @@ class DeveloperTools:
                 "Provide a highly technical, concise explanation of the bugs found. Do not output the fixed code yet, just the analysis.\n\n"
                 f"CODE:\n{code_content}"
             )
-            response = client.models.generate_content(
-                model=self.model_name,
-                contents=prompt
-            )
+            def make_call(client):
+                return client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt
+                )
+            response = run_with_key_pool(make_call)
+            
+            if response is None:
+                return "Analysis failed due to quota or connection limits."
+                
             return response.text.strip()
         except Exception as e:
             return f"Failed to analyze code in {filename}: {str(e)}"
@@ -151,10 +147,14 @@ class DeveloperTools:
                 f"You are generating a file named '{filename}'. "
                 "Output ONLY the raw code. Do not include markdown code blocks like ```python. Just the raw text."
             )
-            response = client.models.generate_content(
-                model=self.model_name,
-                contents=prompt
-            )
+            def make_call(client):
+                return client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt
+                )
+            response = run_with_key_pool(make_call)
+            if response is None:
+                return "Failed to generate code due to quota limits."
             raw_code = response.text.strip()
             
             # Remove markdown blocks if Gemini stubbornly includes them
@@ -187,10 +187,14 @@ class DeveloperTools:
                 "The script will be executed immediately. Ensure it is robust and prints clear output. "
                 "Output ONLY the raw Python code without markdown blocks."
             )
-            response = client.models.generate_content(
-                model=self.model_name,
-                contents=prompt
-            )
+            def make_call(client):
+                return client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt
+                )
+            response = run_with_key_pool(make_call)
+            if response is None:
+                return "Autonomous module failed due to quota limits."
             raw_code = response.text.strip()
             
             if raw_code.startswith("```"):
@@ -247,10 +251,14 @@ class DeveloperTools:
                 "Include a time.sleep() in the loop to prevent high CPU usage. "
                 "Output ONLY the raw Python code without markdown blocks."
             )
-            response = client.models.generate_content(
-                model=self.model_name,
-                contents=prompt
-            )
+            def make_call(client):
+                return client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt
+                )
+            response = run_with_key_pool(make_call)
+            if response is None:
+                return "Failed to spawn subagent due to quota limits."
             raw_code = response.text.strip()
             
             if raw_code.startswith("```"):

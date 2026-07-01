@@ -129,6 +129,20 @@ class GeminiKeyPool:
             )
             return best.key
 
+    def get_primary(self) -> str:
+        """
+        Always return the PRIMARY key (index 0) for Gemini Live streaming.
+        Live API requires a stable, project-enabled key. Secondary keys may
+        belong to projects that have not enabled the Live API endpoint.
+        Falls back to get() if primary is disabled.
+        """
+        with self._lock:
+            if self._entries and self._entries[0].is_available:
+                self._entries[0].use_count += 1
+                return self._entries[0].key
+        # Primary unavailable — fall back to best available
+        return self.get()
+
     def report_quota(self, key: str) -> None:
         """Call this when the API returns 429 / RESOURCE_EXHAUSTED."""
         with self._lock:

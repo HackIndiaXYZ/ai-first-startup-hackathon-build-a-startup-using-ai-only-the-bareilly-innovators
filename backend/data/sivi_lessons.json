@@ -1,0 +1,20 @@
+[
+  {
+    "timestamp": "2026-07-01T12:09:09.924093",
+    "source": "auto_retry_success",
+    "lesson": "WHATSAPP_READ_CHAT failed with TIMEOUT but succeeded on retry. This is a transient error.",
+    "cmd_type": "WHATSAPP_READ_CHAT",
+    "severity": "low",
+    "hit_count": 2,
+    "last_seen": "2026-07-01T15:03:39.139131"
+  },
+  {
+    "timestamp": "2026-07-01T12:21:03.657285",
+    "source": "pattern_detection",
+    "lesson": "Command type 'PARSE_FAIL' keeps failing with 'PARSE_FAIL': The command tag `[CMD: refresh dashboard]` was not recognized by the parser.. This has happened 3 times in the last 24 hours. The [CMD: ...] tag format may be wrong. Check the exact tag syntax in system prompt.",
+    "cmd_type": "PARSE_FAIL",
+    "severity": "high",
+    "hit_count": 1,
+    "last_seen": "2026-07-01T12:21:03.657285"
+  }
+]

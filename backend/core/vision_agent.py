@@ -1,57 +1,31 @@
 """
 SIVI AI — Vision Agent
-Leverages Gemini's spatial reasoning to find the X, Y coordinates of UI elements on the screen.
+Leverages Gemini 2.0 Flash for extremely fast spatial reasoning
+to find the X, Y coordinates of UI elements on the screen.
 """
 
 import os
 import re
-import json
+import asyncio
+from dotenv import load_dotenv
 import pyautogui
 from PIL import ImageGrab, Image
-
-try:
-    from google import genai
-except ImportError:
-    genai = None
-
-def _get_api_key():
-    key = os.getenv("GEMINI_API_KEY")
-    if key: return key
-    try:
-        settings_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "sivi_settings.json")
-        with open(settings_path, "r") as f:
-            return json.load(f).get("api_key")
-    except Exception:
-        return None
+from google import genai
+from google.genai import types
+from genai_runner import run_with_key_pool
 
 class VisionAgent:
     def __init__(self):
-        self.model_name = "gemini-flash-latest"
-        
-    def _get_client(self):
-        if not genai: return None
-        key = _get_api_key()
-        return genai.Client(api_key=key) if key else None
+        pass
 
-    def find_ui_element(self, target_description: str, img: Image.Image = None) -> tuple[int, int]:
-        """
-        Uses Gemini to find the bounding box of a UI element on the screen.
-        Returns the (x, y) logical center coordinates of the element, or None if not found.
-        """
-        client = self._get_client()
-        if not client:
-            print(" Vision Agent offline. No API key.")
-            return None
-
+    async def _async_find_ui_element(self, target_description: str, img: Image.Image = None) -> tuple[int, int]:
         if img is None:
             try:
                 img = ImageGrab.grab()
             except Exception as e:
                 print("=========================================================")
                 print(" ERROR: VISION AGENT FAILED TO CAPTURE SCREEN")
-                print(" macOS is blocking screen capture!")
-                print(" Please go to System Settings -> Privacy & Security -> Screen Recording")
-                print(" and grant permissions to your Terminal / iTerm / Python.")
+                print(" Please check OS permissions for screen recording.")
                 print("=========================================================")
                 return None
 
@@ -62,10 +36,25 @@ If the element is absolutely nowhere on the screen, respond exactly with: None""
 
         try:
             print(f" Vision Agent analyzing screen for: {target_description}...")
-            response = client.models.generate_content(
-                model=self.model_name,
-                contents=[prompt, img]
-            )
+            
+            # Use run_in_executor to avoid blocking the event loop with synchronous Gemini call
+            loop = asyncio.get_event_loop()
+            
+            def make_call(client):
+                return client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=[img, prompt],
+                    config=types.GenerateContentConfig(
+                        temperature=0.1,
+                    )
+                )
+
+            response = await loop.run_in_executor(None, lambda: run_with_key_pool(make_call))
+            
+            if response is None:
+                return None
+
+            
             text = response.text.strip()
             
             if "None" in text:
@@ -73,7 +62,7 @@ If the element is absolutely nowhere on the screen, respond exactly with: None""
                 return None
                 
             # Extract [ymin, xmin, ymax, xmax]
-            match = re.search(r'\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\]', text)
+            match = re.search(r'\[\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]', text)
             if not match:
                 print(f" Vision Agent returned invalid format: {text}")
                 return None
@@ -97,5 +86,23 @@ If the element is absolutely nowhere on the screen, respond exactly with: None""
         except Exception as e:
             print(f" Vision Agent failed: {e}")
             return None
+
+    def find_ui_element(self, target_description: str, img: Image.Image = None) -> tuple[int, int]:
+        """
+        Synchronous wrapper for legacy code compatibility (e.g. whatsapp_desktop_controller).
+        """
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        if loop.is_running():
+            # If we're already in an async context but calling the sync wrapper
+            # (which happens in whatsapp_desktop_controller's Thread)
+            future = asyncio.run_coroutine_threadsafe(self._async_find_ui_element(target_description, img), loop)
+            return future.result()
+        else:
+            return loop.run_until_complete(self._async_find_ui_element(target_description, img))
 
 vision_agent = VisionAgent()

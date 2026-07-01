@@ -121,9 +121,9 @@ class GeminiLiveClient:
         return self._connected
 
     def _pick_key(self) -> str:
-        """Get the best available key from the pool, or fallback."""
+        """Get the PRIMARY key for Live sessions (secondary keys may not have Live API enabled)."""
         if _key_pool is not None:
-            return _key_pool.get()
+            return _key_pool.get_primary()
         return self._fallback_api_key
 
     def _build_ws_url(self) -> str:
@@ -208,7 +208,7 @@ class GeminiLiveClient:
                 else:
                     logger.warning(f"Unexpected setup response: {data}")
 
-            except websockets.exceptions.ConnectionClosedError as e:
+            except websockets.exceptions.ConnectionClosed as e:
                 err = str(e)
                 logger.warning(f"WebSocket closed: {err}")
                 # Detect quota / auth errors and report to pool
@@ -216,7 +216,7 @@ class GeminiLiveClient:
                     if "429" in err or "quota" in err.lower() or "resource_exhausted" in err.lower():
                         _key_pool.report_quota(current_key)
                         logger.info(f"[KeyPool] Reported quota on ...{current_key[-6:]} — next key on reconnect")
-                    elif "401" in err or "unauthenticated" in err.lower() or "invalid" in err.lower():
+                    elif "401" in err or "403" in err or "1008" in err or "unauthenticated" in err.lower() or "invalid" in err.lower() or "policy violation" in err.lower():
                         _key_pool.report_invalid(current_key)
                         logger.error(f"[KeyPool] Reported invalid on ...{current_key[-6:]}")
 

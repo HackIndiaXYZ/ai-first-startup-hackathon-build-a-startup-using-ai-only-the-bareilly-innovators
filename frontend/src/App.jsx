@@ -7,8 +7,9 @@ import {
   CloudRain, Newspaper, Battery, Calendar, Monitor, Clock, ShieldCheck, Zap, Sun, Cpu, Wifi
 } from 'lucide-react';
 
-const API = 'http://localhost:8000';
-const WS_URL = 'ws://localhost:8000/ws';
+const HOST = window.location.hostname;
+const API = `http://${HOST}:8000`;
+const WS_URL = `ws://${HOST}:8000/ws`;
 
 /* ── Constants & Utilities ── */
 const ORB_COLORS = { idle:'#1e3a5f', listening:'#3b82f6', speaking:'#8b5cf6', thinking:'#d97706' };
@@ -103,6 +104,12 @@ export default function App() {
           setHistory(prev => [...prev, msg]);
         } else if (msg.type === 'settings_updated') {
           setSettings(msg.settings);
+        } else if (msg.type === 'dashboard_refresh') {
+          fetchDashboardData();
+        } else if (msg.type === 'dashboard_data') {
+          setDashboardData(msg.data);
+        } else if (msg.type === 'system_info') {
+          setSysInfo(msg.data);
         }
       } catch {}
     };
@@ -135,7 +142,10 @@ export default function App() {
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    if (chat.length > 0) setOutputTranscript('');
+    if (chat.length > 0) {
+      setOutputTranscript('');
+      setInputTranscript('');
+    }
   }, [chat]);
 
   /* ── API calls ── */
@@ -213,20 +223,22 @@ export default function App() {
   const sendText = async () => {
     if (!textInput.trim()) return;
     const txt = textInput; setTextInput('');
+    setLoading(true);
     try { 
       await axios.post(`${API}/voice/send-text`, { text: txt }); 
     } catch (e) { 
       showToast('Message failed: ' + e.message, 'error'); 
       console.error(e);
     }
+    setLoading(false);
   };
 
   const sendCmd = async () => {
     if (!cmdInput.trim()) return;
     setLoading(true);
     try {
-      const r = await axios.post(`${API}/command`, { command: cmdInput });
-      setHistory(prev => [...prev, { command: cmdInput, response: r.data.response, timestamp: new Date().toISOString() }]);
+      await axios.post(`${API}/command`, { command: cmdInput });
+      // The WebSocket will broadcast the response back and update history automatically
       setCmdInput('');
     } catch (e) { 
       showToast('Command failed to execute. Server might be offline.', 'error'); 
@@ -236,21 +248,25 @@ export default function App() {
   };
 
   const toggleMute = async () => {
+    setLoading(true);
     try { 
       await axios.post(`${API}/voice/mute`); 
     } catch (e) { 
       showToast('Failed to toggle mute', 'error'); 
       console.error(e);
     }
+    setLoading(false);
   };
 
   const interrupt = async () => {
+    setLoading(true);
     try { 
       await axios.post(`${API}/voice/interrupt`); 
     } catch (e) { 
       showToast('Failed to interrupt Sivi', 'error'); 
       console.error(e);
     }
+    setLoading(false);
   };
 
   const saveSettings = async () => {
@@ -339,16 +355,16 @@ export default function App() {
             {/* System Info */}
             <div className="glass-panel hover-glow" style={{ padding: '15px', display: 'flex', gap: '10px' }}>
                <div style={{ flex: 1, background: 'rgba(15,23,42,0.4)', borderRadius: '10px', padding: '10px', textAlign: 'center' }}>
-                  <BatteryCharging size={18} color={dashboardData?.system?.is_charging ? "#34d399" : "#fbbf24"} style={{ margin: '0 auto 5px' }} />
-                  <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#e2e8f0' }}>{dashboardData?.system?.battery || 0}%</div>
+                  <BatteryCharging size={18} color={(sysInfo?.is_charging ?? dashboardData?.system?.is_charging) ? "#34d399" : "#fbbf24"} style={{ margin: '0 auto 5px' }} />
+                  <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#e2e8f0' }}>{sysInfo?.battery ?? dashboardData?.system?.battery ?? 0}%</div>
                </div>
                <div style={{ flex: 1, background: 'rgba(15,23,42,0.4)', borderRadius: '10px', padding: '10px', textAlign: 'center' }}>
                   <Cpu size={18} color="#f472b6" style={{ margin: '0 auto 5px' }} />
-                  <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#e2e8f0' }}>{dashboardData?.system?.cpu || 0}%</div>
+                  <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#e2e8f0' }}>{sysInfo?.cpu ?? dashboardData?.system?.cpu ?? 0}%</div>
                </div>
                <div style={{ flex: 1, background: 'rgba(15,23,42,0.4)', borderRadius: '10px', padding: '10px', textAlign: 'center' }}>
                   <Wifi size={18} color="#60a5fa" style={{ margin: '0 auto 5px' }} />
-                  <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#e2e8f0' }}>{dashboardData?.system?.speed_down || 0}M</div>
+                  <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#e2e8f0' }}>{sysInfo?.speed_down ?? dashboardData?.system?.speed_down ?? 0}M</div>
                </div>
             </div>
 
@@ -369,7 +385,7 @@ export default function App() {
           <div className="dashboard-center">
             
             {/* Live Chat Bubbles below Sivi */}
-            <div style={{ width: '100%', maxWidth: '400px', marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={{ width: '100%', maxWidth: '400px', marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', overflowY: 'auto', maxHeight: '180px', padding: '5px' }}>
               {inputTranscript && <div key={inputTranscript} className="chat-bubble-user chat-bubble-anim">You: "{inputTranscript}"</div>}
               {outputTranscript && <div key={outputTranscript} className="chat-bubble-ai chat-bubble-anim">Sivi: "{outputTranscript}"</div>}
             </div>
@@ -378,17 +394,17 @@ export default function App() {
             <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '10px', width: '100%', maxWidth: '400px' }}>
               {isConnected && (
                 <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
-                  <button className="btn-secondary" onClick={toggleMute} style={{flex: 1, display:'flex', justifyContent:'center', alignItems:'center', gap:'8px'}}>
+                  <button className="btn-secondary" onClick={toggleMute} disabled={!isConnected || loading} style={{flex: 1, display:'flex', justifyContent:'center', alignItems:'center', gap:'8px'}}>
                     {isMuted ? <><Mic size={14} /> Unmute</> : <><MicOff size={14} /> Mute</>}
                   </button>
-                  <button className="btn-secondary" onClick={interrupt} style={{flex: 1, display:'flex', justifyContent:'center', alignItems:'center', gap:'8px'}}>
+                  <button className="btn-secondary" onClick={interrupt} disabled={!isConnected || loading} style={{flex: 1, display:'flex', justifyContent:'center', alignItems:'center', gap:'8px'}}>
                     <Hand size={14} /> Interrupt
                   </button>
                 </div>
               )}
               <div style={{ display: 'flex', gap: '10px' }}>
-                <input className="input-field" style={{flex: 1}} value={textInput} onChange={e => setTextInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && sendText()} placeholder="Type message to Sivi..." />
-                <button className="btn-primary" onClick={sendText} disabled={!isConnected}>Send</button>
+                <input className="input-field" style={{flex: 1}} value={textInput} onChange={e => setTextInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && !loading && sendText()} placeholder="Type message to Sivi..." />
+                <button className="btn-primary" onClick={sendText} disabled={!isConnected || loading}>Send</button>
               </div>
             </div>
           </div>
@@ -461,18 +477,20 @@ export default function App() {
           </div>
           
           {/* Main Action Button */}
-          <div 
+          <button 
             onClick={isConnected ? stopVoice : startVoice}
+            disabled={loading}
             style={{ 
               display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 20px', 
-              borderRadius: '20px', cursor: 'pointer',
+              borderRadius: '20px', cursor: loading ? 'wait' : 'pointer', outline: 'none',
               background: isConnected ? 'rgba(239,68,68,0.2)' : 'rgba(167, 139, 250, 0.2)', 
               border: `1px solid ${isConnected ? '#ef4444' : '#a78bfa'}`,
               boxShadow: `0 0 15px ${isConnected ? 'rgba(239,68,68,0.3)' : 'rgba(167, 139, 250, 0.3)'}`,
-              transition: 'all 0.3s ease'
+              transition: 'all 0.3s ease', textAlign: 'left',
+              opacity: loading ? 0.6 : 1
             }}
           >
-            <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: isConnected ? '#ef4444' : 'linear-gradient(135deg, var(--theme-primary-start), var(--theme-primary-end))', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: isConnected ? '#ef4444' : 'linear-gradient(135deg, var(--theme-primary-start), var(--theme-primary-end))', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
               {isConnected ? <Square size={14} color="#fff" /> : <Mic size={16} color="#fff" />}
             </div>
             <div>
@@ -483,7 +501,7 @@ export default function App() {
                 {isConnected ? 'Tap to disconnect.' : 'Tap to Start'}
               </div>
             </div>
-          </div>
+          </button>
         </div>
       </div>
     );
@@ -505,7 +523,7 @@ export default function App() {
         ))}
       </div>
       <div style={{ display:'flex', gap:'12px', flexWrap: 'wrap' }}>
-        <input className="input-field" style={{flex: '1 1 200px'}} value={cmdInput} onChange={e => setCmdInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && sendCmd()} placeholder="Type a command (e.g. open notepad)..." />
+        <input className="input-field" style={{flex: '1 1 200px'}} value={cmdInput} onChange={e => setCmdInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && !loading && sendCmd()} placeholder="Type a command (e.g. open notepad)..." />
         <button className="btn-primary" style={{flex: '0 0 auto'}} onClick={sendCmd} disabled={loading}>Run</button>
       </div>
     </div>

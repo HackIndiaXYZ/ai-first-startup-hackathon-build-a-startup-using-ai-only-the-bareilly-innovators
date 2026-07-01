@@ -55,7 +55,7 @@ input, select, button { font-family: inherit; }
 .nav-btn:hover {
   background: rgba(255, 255, 255, 0.05);
   color: #e2e8f0;
-  transform: translateX(4px);
+  transform: translateY(-2px);
 }
 
 .nav-btn.active {
@@ -81,10 +81,12 @@ input, select, button { font-family: inherit; }
   transition: all 0.4s ease;
 }
 
-.btn-primary:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 10px 25px rgba(0,0,0,0.5);
-  border-color: rgba(148, 163, 184, 0.3);
+@media (hover: hover) {
+  .btn-primary:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+    border-color: rgba(148, 163, 184, 0.3);
+  }
 }
 
 /* Acertinity UI Dot Background with Cursor Highlight */
@@ -156,9 +158,11 @@ input, select, button { font-family: inherit; }
   transition: all 0.2s ease;
 }
 
-.btn-secondary:hover {
-  background: rgba(30, 41, 59, 0.8);
-  border: 1px solid rgba(148, 163, 184, 0.4);
+@media (hover: hover) {
+  .btn-secondary:hover {
+    background: rgba(30, 41, 59, 0.8);
+    border: 1px solid rgba(148, 163, 184, 0.4);
+  }
 }
 
 .btn-danger {
@@ -169,9 +173,11 @@ input, select, button { font-family: inherit; }
   transition: all 0.2s ease;
 }
 
-.btn-danger:hover {
-  background: rgba(239, 68, 68, 0.25);
-  transform: scale(1.02);
+@media (hover: hover) {
+  .btn-danger:hover {
+    background: rgba(239, 68, 68, 0.25);
+    transform: scale(1.02);
+  }
 }
 
 .input-field {
@@ -220,10 +226,12 @@ input, select, button { font-family: inherit; }
   transition: all 0.3s ease;
 }
 
-.module-card:hover {
-  background: rgba(15, 23, 42, 0.6);
-  border-color: rgba(var(--theme-primary-rgb), 0.3);
-  transform: translateY(-2px);
+@media (hover: hover) {
+  .module-card:hover {
+    background: rgba(15, 23, 42, 0.6);
+    border-color: rgba(var(--theme-primary-rgb), 0.3);
+    transform: translateY(-2px);
+  }
 }
 
 @keyframes float {
@@ -247,10 +255,12 @@ input, select, button { font-family: inherit; }
 .hover-glow {
   transition: all 0.3s ease;
 }
-.hover-glow:hover {
-  border-color: rgba(var(--theme-primary-rgb), 0.5) !important;
-  box-shadow: 0 0 20px rgba(var(--theme-primary-rgb), 0.2);
-  transform: translateY(-2px);
+@media (hover: hover) {
+  .hover-glow:hover {
+    border-color: rgba(var(--theme-primary-rgb), 0.5) !important;
+    box-shadow: 0 0 20px rgba(var(--theme-primary-rgb), 0.2);
+    transform: translateY(-2px);
+  }
 }
 
 /* Responsive Dashboard Layout */
@@ -334,6 +344,7 @@ input, select, button { font-family: inherit; }
   padding: 10px 24px;
   margin-bottom: 20px;
   border-radius: 20px;
+  position: relative;
   z-index: 10;
   gap: 15px;
 }

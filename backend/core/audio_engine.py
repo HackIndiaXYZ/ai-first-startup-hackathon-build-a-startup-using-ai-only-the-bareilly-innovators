@@ -44,7 +44,8 @@ CHUNK_SIZE = 4096
 DTYPE = np.int16
 
 # How long silence must persist before we consider speaking done (seconds)
-SPEAKING_SILENCE_THRESHOLD = 0.2
+# Increased to 0.8 to allow room echo/reverb to fully decay before opening mic
+SPEAKING_SILENCE_THRESHOLD = 0.8
 
 
 class AudioEngine:
@@ -76,6 +77,8 @@ class AudioEngine:
         self.on_amplitude_changed: Optional[Callable[[float], None]] = None
         self.on_speaking_started: Optional[Callable] = None
         self.on_speaking_stopped: Optional[Callable] = None
+        self.on_interrupted: Optional[Callable] = None
+        self._last_interrupt_time: float = 0.0
 
     @property
     def is_recording(self) -> bool:

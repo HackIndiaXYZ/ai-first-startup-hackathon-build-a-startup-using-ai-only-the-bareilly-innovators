@@ -94,7 +94,10 @@ WEATHER_KEYWORDS = ["weather in", "weather of", "climate in", "mausam kaisa hai"
 REMEMBER_KEYWORDS = ["remember", "yaad rakho", "memorize"]
 FORGET_KEYWORDS = ["forget all", "forget everything", "clear memory", "yaad bhool jao", "memory clear karo"]
 EMOTION_ANALYSIS_KEYWORDS = ["how do i look", "read my face", "check my mood",
-                             "mera mood kaisa hai", "analyze my emotion", "meri shakal dekho"]
+                             "mera mood kaisa hai", "analyze my emotion", "meri shakal dekho",
+                             "mujhe dekho", "mood batao", "main kaisa dikh raha hoon"]
+WELLNESS_KEYWORDS = ["wellness check", "posture check", "eye strain", "health check",
+                     "sehat kaisi hai", "aankhein thak gayi", "kamar dard", "posture dekho"]
 DESCRIBE_SCENE_KEYWORDS = ["take photo", "what do you see", "photo khicho", "describe what you see"]
 SWITCH_MODE_KEYWORDS = ["switch mode to", "change mode to", "switch personality to",
                         "switch to", "mode badlo", "personality badlo"]
@@ -169,7 +172,8 @@ def parse_command(text: str) -> "PCCommand | None":
         "WIFI_ON", "WIFI_OFF", "BLUETOOTH_ON", "BLUETOOTH_OFF", "MEDIA_PLAY_PAUSE",
         "MEDIA_NEXT", "MEDIA_PREV", "READ_CLIPBOARD", "NEWS", "SYSTEM_STATUS",
         "READ_WINDOWS", "FORGET_ALL", "ANALYZE_EMOTION", "DESCRIBE_SCENE", "DEV_GIT_STATUS",
-        "TAB_NEXT", "TAB_PREV", "TAB_NEW", "TAB_CLOSE", "BROWSER_READ_PAGE", "BROWSER_FULLSCREEN", "BROWSER_STATUS"
+        "TAB_NEXT", "TAB_PREV", "TAB_NEW", "TAB_CLOSE", "BROWSER_READ_PAGE", "BROWSER_FULLSCREEN",
+        "BROWSER_STATUS", "REFRESH_DASHBOARD", "CALENDAR_EVENTS", "ANALYZE_WELLNESS",
     }
     if text_upper in VALID_NO_PARAM_TYPES:
         return PCCommand(type=text_upper)
@@ -205,6 +209,8 @@ def parse_command(text: str) -> "PCCommand | None":
             return PCCommand(type="GET_WEATHER", params={"location": cmd_val})
         elif cmd_type == "REMEMBER":
             return PCCommand(type="REMEMBER", params={"fact": cmd_val})
+        elif cmd_type == "SWARM_RUN":
+            return PCCommand(type="SWARM_RUN", params={"query": cmd_val})
         elif cmd_type in ["CREATE_FILE", "DELETE_FILE", "OPEN_FILE", "FIND_FILE"]:
             return PCCommand(type=cmd_type, params={"name": cmd_val})
         elif cmd_type == "LIST_FILES":

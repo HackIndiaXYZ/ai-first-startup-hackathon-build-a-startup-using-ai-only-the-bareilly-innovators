@@ -144,7 +144,7 @@ class TextLLM:
                     key_pool.report_quota(key)
                     return None  # Caller rotates to next key
 
-                if resp.status_code == 401:
+                if resp.status_code in (401, 403, 1008):
                     key_pool.report_invalid(key)
                     return None  # Caller rotates to next key
 

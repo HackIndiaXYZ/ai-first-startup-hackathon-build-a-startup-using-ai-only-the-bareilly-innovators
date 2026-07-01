@@ -12,26 +12,11 @@ except ImportError:
     genai = None
 
 
-import json
-
-def _get_api_key():
-    key = os.getenv("GEMINI_API_KEY")
-    if key: return key
-    try:
-        settings_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "sivi_settings.json")
-        with open(settings_path, "r") as f:
-            return json.load(f).get("api_key")
-    except Exception:
-        return None
+from genai_runner import run_with_key_pool
 
 class ScreenReader:
     def __init__(self):
         self.model_name = "gemini-2.0-flash"
-
-    def _get_client(self):
-        if not genai: return None
-        key = _get_api_key()
-        return genai.Client(api_key=key) if key else None
 
     def capture_screen(self) -> Image.Image:
         """Full screen capture using Pillow."""
@@ -41,10 +26,6 @@ class ScreenReader:
     def read_screen(self, command: str = "") -> str:
         """Analyze the screen content based on the command."""
         img = self.capture_screen()
-        client = self._get_client()
-
-        if not client:
-            return "Screen reader offline. Gemini API key not configured."
 
         # Pick the right prompt based on command
         if "summarize" in command:
@@ -58,10 +39,17 @@ class ScreenReader:
 
         try:
             print(" Analyzing screen with Gemini...")
-            response = client.models.generate_content(
-                model=self.model_name,
-                contents=[prompt, img]
-            )
+            def make_call(client):
+                return client.models.generate_content(
+                    model=self.model_name,
+                    contents=[prompt, img]
+                )
+                
+            response = run_with_key_pool(make_call)
+            
+            if response is None:
+                return "Screen analysis failed due to quota or connection limits."
+                
             return response.text.replace("*", "").replace("\n", " ").strip()
         except Exception as e:
             return f"Screen analysis failed: {e}"

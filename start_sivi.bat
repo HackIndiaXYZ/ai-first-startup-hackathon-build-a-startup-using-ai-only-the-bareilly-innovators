@@ -48,8 +48,7 @@ start "SIVI Backend" cmd /k "cd /d %~dp0backend && venv\Scripts\python bridge_se
 echo Waiting for backend to initialize...
 ping -n 5 127.0.0.1 >nul
 
-echo Starting Wake Word Listener...
-start "SIVI WakeWord" cmd /k "cd /d %~dp0backend && venv\Scripts\python core\Wake_Word_detection.py"
+
 
 echo Starting Proactive Background Monitor...
 start "SIVI Background" cmd /k "cd /d %~dp0backend && venv\Scripts\python core\background_monitor.py"
@@ -67,7 +66,7 @@ echo ================================================
 echo.
 echo  Voice Commands Ready:
 echo  - Say wake word to activate
-echo  - "Hey Jarvis" or custom wake word
+echo  - "Hey Sivi" or your custom wake word
 echo  - Or use the dashboard at localhost:5173
 echo.
 ping -n 5 127.0.0.1 >nul

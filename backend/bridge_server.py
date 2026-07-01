@@ -43,7 +43,7 @@ from core.gemini_live_client import GeminiLiveClient, MODELS, VOICES
 from core.audio_engine import AudioEngine
 from core.command_parser import parse_command
 from core.personality import build_system_prompt, get_greeting, get_personality_list, PERSONALITIES
-from core.jarvis_controller import controller
+from core.sivi_controller import controller
 from core.self_learning import self_learning
 from core.always_on_agents import agents
 from core.agent_orchestrator import orchestrator
@@ -68,11 +68,18 @@ def load_chat_history() -> list[dict]:
     if os.path.exists(CHAT_HISTORY_FILE):
         try:
             with open(CHAT_HISTORY_FILE, "r", encoding="utf-8") as f:
-                history = json.load(f)
+                raw = json.load(f)
+            # Handle both formats: flat list OR {"sessions": [...]} dict
+            if isinstance(raw, dict):
+                history = raw.get("sessions", [])
+            elif isinstance(raw, list):
+                history = raw
+            else:
+                history = []
             now = time.time()
             two_days_sec = 48 * 3600
             # Keep only messages from the last 48 hours
-            filtered = [msg for msg in history if now - msg.get("timestamp", 0) <= two_days_sec]
+            filtered = [msg for msg in history if isinstance(msg, dict) and now - msg.get("timestamp", 0) <= two_days_sec]
             return filtered[-200:]
         except Exception as e:
             logger.error(f"Failed to load chat history: {e}")
@@ -214,6 +221,14 @@ def on_turn_complete(user_text: str, sivi_text: str):
         matches = re.finditer(r'\[CMD:\s*(.*?)\]', sivi_text, re.IGNORECASE)
         for match in matches:
             cmd_val = match.group(1).strip()
+            # Clean up nested tags if model hallucinates them (e.g. [CMD: [CMD: open vscode]])
+            if cmd_val.upper().startswith("[CMD:"):
+                cmd_val = cmd_val[5:].strip()
+                if cmd_val.endswith("]"):
+                    cmd_val = cmd_val[:-1].strip()
+            if cmd_val.upper().startswith("CMD:"):
+                cmd_val = cmd_val[4:].strip()
+
             if cmd_val not in extracted_cmds:
                 extracted_cmds.append(cmd_val)
         # Remove the command tags from the visible text
@@ -231,6 +246,16 @@ def on_turn_complete(user_text: str, sivi_text: str):
         if not chat_messages or chat_messages[-1].get("text") != sivi_text:
             chat_messages.append(msg_sivi)
             broadcast_sync({"type": "chat_message", **msg_sivi})
+
+    # Subconscious Memory Logging
+    try:
+        from core.subconscious_memory import subconscious_memory
+        if user_text:
+            subconscious_memory.log_message("user", user_text)
+        if sivi_text:
+            subconscious_memory.log_message("sivi", sivi_text)
+    except Exception as e:
+        logger.error(f"Subconscious logging error: {e}")
 
     # Memory Management: Prevent unbounded growth
     while len(chat_messages) > 200:
@@ -268,6 +293,26 @@ def on_turn_complete(user_text: str, sivi_text: str):
             for extracted_cmd in extracted_cmds:
                 cmd = parse_command(extracted_cmd)
                 if not cmd:
+                    # Check if it's a workflow/macro trigger
+                    from core.workflow_engine import workflow_engine
+                    workflow_steps = workflow_engine.get_workflow(extracted_cmd.strip())
+                    if workflow_steps:
+                        logger.info(f"[WorkflowEngine] Expanding macro '{extracted_cmd}' → {workflow_steps}")
+                        for step_cmd_text in workflow_steps:
+                            step_cmd = parse_command(step_cmd_text)
+                            if step_cmd:
+                                try:
+                                    step_result = await asyncio.wait_for(
+                                        asyncio.to_thread(controller.execute_command, step_cmd),
+                                        timeout=20.0
+                                    )
+                                    all_feedback.append(f"Workflow step '{step_cmd_text}': {step_result}")
+                                except Exception as step_e:
+                                    all_feedback.append(f"Workflow step '{step_cmd_text}' failed: {step_e}")
+                                # Small delay between steps for natural pacing
+                                await asyncio.sleep(0.5)
+                        continue  # Skip to next CMD tag
+
                     logger.warning(f"Failed to parse AI command tag: {extracted_cmd}")
                     # Log to self-learning engine
                     self_learning.log_error(
@@ -394,7 +439,7 @@ def on_turn_complete(user_text: str, sivi_text: str):
                         
                         dev_commands = ["DEV_RUN_CMD", "DEV_GIT_STATUS", "DEV_KILL_PORT", "DEV_ANALYZE_CODE", "DEV_GENERATE_CODE", "DEV_EXECUTE_SCRIPT", "DEV_SPAWN_SUBAGENT"]
                         speak_commands = [
-                            "READ_CLIPBOARD", "READ_WINDOWS", "ANALYZE_EMOTION", "DESCRIBE_SCENE",
+                            "READ_CLIPBOARD", "READ_WINDOWS", "ANALYZE_EMOTION", "ANALYZE_WELLNESS", "DESCRIBE_SCENE",
                             "SYSTEM_STATUS", "GET_WEATHER", "READ_SCREEN", "NEWS", "SEARCH", "OPEN_APP",
                             "FIND_FILE", "LIST_FILES", "CALENDAR_EVENTS", "CREATE_EVENT",
                             "MEDICAL_ADVICE", "WRITE_CLIPBOARD", "CLOSE_APP", "SWITCH_APP", "TYPE_TEXT",
@@ -406,22 +451,40 @@ def on_turn_complete(user_text: str, sivi_text: str):
                             "REMEMBER", "FORGET_ALL", "SEND_EMAIL", "SEND_WHATSAPP", "WHATSAPP_READ_CHAT",
                             "PLAY_YOUTUBE", "PLAY_SPOTIFY", "LOCK_SCREEN", "VOLUME_UP", "VOLUME_DOWN",
                             "MUTE", "BRIGHTNESS_UP", "BRIGHTNESS_DOWN", "MEDIA_PLAY_PAUSE",
-                            "MEDIA_NEXT", "MEDIA_PREV",
+                            "MEDIA_NEXT", "MEDIA_PREV", "SLEEP", "SHUTDOWN",
                         ]
                         
                         if cmd.type in speak_commands or cmd.type in dev_commands:
                             if cmd.type == "ANALYZE_EMOTION":
-                                all_feedback.append(f"Visual analysis result: '{result}'. Based on this emotion, respond with genuine affection, empathy, and care in your persona. Be supportive.")
+                                all_feedback.append(
+                                    f"[DEEP EMOTION ANALYSIS RESULT]: '{result}'. "
+                                    f"This is what the camera detected about Boss's current emotional state. "
+                                    f"The camera_vision module has already crafted a caring response in Hinglish — "
+                                    f"SPEAK THIS RESPONSE DIRECTLY to the user exactly as written. Do not paraphrase. "
+                                    f"Add your own genuine warmth if the response seems short."
+                                )
+                            elif cmd.type == "ANALYZE_WELLNESS":
+                                all_feedback.append(
+                                    f"[WELLNESS CHECK RESULT]: '{result}'. "
+                                    f"This is the physical wellness analysis from the camera. "
+                                    f"Speak this caring response to Boss directly and naturally in Hinglish. "
+                                    f"Add genuine concern and love — Boss's health matters to you."
+                                )
                             elif cmd.type == "DESCRIBE_SCENE":
-                                all_feedback.append(f"Photo analysis: '{result}'.")
+                                all_feedback.append(f"Camera scene description: '{result}'. Share this naturally with Boss.")
                             elif cmd.type in dev_commands:
                                 all_feedback.append(f"Raw terminal/system output for {cmd.type}:\n{result}")
                             elif cmd.type == "READ_SCREEN":
                                 all_feedback.append(f"Raw text from screen: {result}")
                             elif cmd.type == "OPEN_APP":
-                                all_feedback.append(f"App open result: {result}")
+                                all_feedback.append(f"App open result: {result}. Confirm warmly to Boss.")
+                            elif cmd.type in ("SLEEP", "SHUTDOWN"):
+                                all_feedback.append(f"{cmd.type} result: {result}. Tell Boss warmly to rest and wish them good night/goodbye.")
                             else:
                                 all_feedback.append(f"{cmd.type} result: {result}")
+                        elif cmd.type == "REFRESH_DASHBOARD" or (isinstance(result, str) and result == "REFRESH_DASHBOARD_SIGNAL"):
+                            broadcast_sync({"type": "dashboard_refresh"})
+                            all_feedback.append("Dashboard has been refreshed. Tell Boss warmly it's done.")
                                 
                 except Exception as e:
                     import traceback as tb
@@ -459,6 +522,24 @@ def on_speaking_started():
 
 
 def on_speaking_stopped():
+    sivi_state["orb_state"] = "listening"
+    sivi_state["status_text"] = "Sun rahi hoon..."
+    broadcast_sync({"type": "state", **sivi_state})
+
+
+def on_user_interrupted():
+    """Triggered when the user speaks loudly while Sivi is speaking."""
+    global audio_engine, gemini_client, sivi_state
+    logger.info("User interrupted Sivi speaking.")
+    if audio_engine:
+        audio_engine.clear_playback_queue()
+    if gemini_client and gemini_client.is_connected:
+        # Send system prompt to acknowledge interruption
+        if _main_loop is not None and _main_loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                gemini_client.send_text("[SYSTEM: USER_INTERRUPTED. The user interrupted you while you were speaking. Stop whatever you were saying immediately and say something very short like 'Sorry, aap kuch keh rahe the?']"),
+                _main_loop
+            )
     sivi_state["orb_state"] = "listening"
     sivi_state["status_text"] = "Sun rahi hoon..."
     broadcast_sync({"type": "state", **sivi_state})
@@ -559,6 +640,11 @@ async def start_voice_session(is_switch: bool = False):
         audio_engine.on_amplitude_changed = on_mic_amplitude
         audio_engine.on_speaking_started = on_speaking_started
         audio_engine.on_speaking_stopped = on_speaking_stopped
+        audio_engine.on_interrupted = on_user_interrupted
+
+        # Start autonomous sensory empathy
+        from core.sensory_orchestrator import sensory_orchestrator
+        sensory_orchestrator.start(gemini_client.send_text)
 
         audio_engine.start_recording()
         audio_engine.start_playback()
@@ -632,9 +718,9 @@ async def _send_greeting_delayed(greeting: str, is_switch: bool = False):
                 screen_ctx = await asyncio.to_thread(screen_reader.read_screen, "Summarize what's on the screen briefly in 1 sentence.")
                 
                 ctx_strings = []
-                if emotion_ctx and "error" not in emotion_ctx.lower():
+                if emotion_ctx and "error" not in emotion_ctx.lower() and "429" not in emotion_ctx:
                     ctx_strings.append(f"User's current mood from webcam: '{emotion_ctx}'.")
-                if screen_ctx and "error" not in screen_ctx.lower():
+                if screen_ctx and "error" not in screen_ctx.lower() and "429" not in screen_ctx:
                     ctx_strings.append(f"User's screen shows: '{screen_ctx}'.")
                 
                 if ctx_strings and gemini_client and gemini_client.is_connected:
@@ -653,6 +739,13 @@ async def stop_voice_session():
     if audio_engine:
         audio_engine.release()
         audio_engine = None
+
+    # Stop autonomous sensory empathy
+    try:
+        from core.sensory_orchestrator import sensory_orchestrator
+        sensory_orchestrator.stop()
+    except ImportError:
+        pass
 
     if gemini_client:
         await gemini_client.disconnect()
@@ -687,6 +780,7 @@ async def lifespan(app: FastAPI):
     # Start background tasks
     notif_task = asyncio.create_task(notification_worker())
     health_task = asyncio.create_task(system_health_worker())
+    telemetry_task = asyncio.create_task(dashboard_telemetry_worker())
     
     # Start always-on background agents
     agents.start(controller)
@@ -695,39 +789,107 @@ async def lifespan(app: FastAPI):
     
     notif_task.cancel()
     health_task.cancel()
+    telemetry_task.cancel()
     agents.stop()
     logger.info("Shutting down Sivi...")
     await stop_voice_session()
 
-async def system_health_worker():
-    """Background task to proactively monitor CPU and RAM usage."""
+async def dashboard_telemetry_worker():
+    """Background task to push real-time system stats to the dashboard."""
+    global _last_net_bytes, _last_net_time
     import psutil
+    import time
+    while True:
+        try:
+            # Battery
+            try:
+                battery = psutil.sensors_battery()
+                battery_percent = battery.percent if battery else 100
+                is_charging = battery.power_plugged if battery else True
+            except Exception:
+                battery_percent = 100
+                is_charging = True
+
+            # CPU
+            cpu = psutil.cpu_percent(interval=0)
+
+            # Network
+            try:
+                net_io = psutil.net_io_counters()
+                current_bytes = net_io.bytes_recv + net_io.bytes_sent
+                current_time = time.time()
+                speed_mbps = 0.0
+                
+                if _last_net_time > 0:
+                    time_diff = current_time - _last_net_time
+                    bytes_diff = current_bytes - _last_net_bytes
+                    if time_diff > 0:
+                        speed_mbps = (bytes_diff / time_diff) * 8 / 1_000_000
+                        
+                _last_net_bytes = current_bytes
+                _last_net_time = current_time
+            except Exception:
+                speed_mbps = 0.0
+
+            sys_data = {
+                "battery": int(battery_percent),
+                "is_charging": is_charging,
+                "cpu": int(cpu),
+                "speed_down": round(speed_mbps, 1)
+            }
+            
+            # Use broadcast directly without threadsafe wrapper since we are in the main loop
+            if connected_clients:
+                dead = []
+                event = {"type": "system_info", "data": sys_data}
+                for ws in connected_clients:
+                    try:
+                        await ws.send_json(event)
+                    except Exception:
+                        dead.append(ws)
+                for ws in dead:
+                    if ws in connected_clients:
+                        connected_clients.remove(ws)
+        except Exception as e:
+            pass
+        await asyncio.sleep(2)
+
+
+async def system_health_worker():
+    """Background task to proactively monitor CPU/RAM and fire proactive suggestions."""
+    import psutil
+    from core.intent_predictor import intent_predictor
     while True:
         try:
             if gemini_client and gemini_client.is_connected and sivi_state.get("orb_state") in ["listening", "idle"]:
-                # Use a small interval to get a quick reading, offloaded to thread to avoid blocking event loop
                 cpu_usage = await asyncio.to_thread(psutil.cpu_percent, 0.1)
                 ram_percent = psutil.virtual_memory().percent
                 
-                # If system is under heavy load, proactively alert the user
+                # Alert on high system load
                 if cpu_usage > 90 or ram_percent > 90:
                     alert_msg = f"[SYSTEM ALERT: Background check detected high usage! CPU is at {cpu_usage}% and RAM is at {ram_percent}%. Warn the user proactively and ask if they want to close any apps.]"
-                    
                     sivi_state["orb_state"] = "thinking"
                     sivi_state["status_text"] = "High system load detected..."
                     await broadcast({"type": "state", **sivi_state})
-                    
                     await gemini_client.send_text(alert_msg)
-                    
-                    # Sleep longer after an alert to avoid spamming
                     await asyncio.sleep(120)
                     continue
+                
+                # Proactive time-aware suggestions (morning briefing, evening check-in, etc.)
+                suggestion = intent_predictor.get_proactive_suggestion(
+                    sivi_connected=sivi_state.get("is_connected", False),
+                    orb_state=sivi_state.get("orb_state", "idle")
+                )
+                if suggestion:
+                    logger.info(f"[IntentPredictor] Firing proactive suggestion: {suggestion[:60]}...")
+                    await gemini_client.send_text(suggestion)
+
         except asyncio.CancelledError:
             break
         except Exception as e:
             logger.error(f"Health worker error: {e}")
             
-        await asyncio.sleep(30)  # Normal check every 30 seconds
+        await asyncio.sleep(30)  # Check every 30 seconds
 
 async def notification_worker():
     """Background worker to check for new Windows notifications and alert Sivi."""
@@ -856,6 +1018,10 @@ async def get_system_info():
 
 _last_net_bytes = 0
 _last_net_time = 0
+# Weather cache: only re-fetch every 10 minutes to avoid hammering the API
+_weather_cache: str = ""
+_weather_cache_ts: float = 0.0
+WEATHER_CACHE_TTL = 600  # 10 minutes
 
 @app.get("/dashboard-data")
 async def get_dashboard_data():
@@ -890,12 +1056,16 @@ async def get_dashboard_data():
     except Exception:
         speed_mbps = 0.0
 
-    # 2. Weather
+    # 2. Weather (cached — only refresh every 10 min)
+    global _weather_cache, _weather_cache_ts
     try:
-        from core.web_scraper import web_scraper
-        weather = await asyncio.to_thread(web_scraper.get_weather, "")
+        if not _weather_cache or (time.time() - _weather_cache_ts) > WEATHER_CACHE_TTL:
+            from core.web_scraper import web_scraper
+            _weather_cache = await asyncio.to_thread(web_scraper.get_weather, "")
+            _weather_cache_ts = time.time()
+        weather = _weather_cache
     except Exception:
-        weather = "Weather unavailable."
+        weather = _weather_cache or "Weather unavailable."
 
     # 3. Calendar
     try:
@@ -927,7 +1097,7 @@ async def get_dashboard_data():
 
 @app.post("/command")
 async def execute_command(req: CommandRequest):
-    """Execute a text command through jarvis_controller."""
+    """Execute a text command through sivi_controller."""
     response = await asyncio.to_thread(controller.process_command, req.command)
     entry = {
         "command": req.command,

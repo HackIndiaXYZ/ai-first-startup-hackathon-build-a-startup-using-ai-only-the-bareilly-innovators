@@ -128,19 +128,19 @@ class BrowserController:
 
     # ── YouTube ─────────────────────────────────────────────────────────────
     async def _play_youtube(self, query: str) -> str:
-        page = await self._get_new_page()
-        self.current_page = page
-
-        url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
-        await page.goto(url)
-
         try:
-            await page.wait_for_selector('ytd-video-renderer', timeout=10000)
-            # Click the first video
-            videos = await page.query_selector_all('ytd-video-renderer a#video-title')
-            if videos:
-                await videos[0].click()
-                return f"Playing '{query}' on YouTube."
+            import urllib.request
+            import urllib.parse
+            import re
+            import webbrowser
+            
+            print(f" Searching YouTube for '{query}'...")
+            html = urllib.request.urlopen("https://www.youtube.com/results?search_query=" + urllib.parse.quote(query))
+            video_ids = re.findall(r"watch\?v=(\S{11})", html.read().decode())
+            if video_ids:
+                url = f"https://www.youtube.com/watch?v={video_ids[0]}"
+                webbrowser.open(url)
+                return f"Playing '{query}' on YouTube in your default browser."
             return "Could not find video on YouTube."
         except Exception as e:
             return f"Failed to play YouTube video: {e}"

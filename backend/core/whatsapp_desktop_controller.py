@@ -226,38 +226,22 @@ class WhatsAppDesktopController:
     def read_chat(self, contact: str = None) -> str:
         """Read recent messages from the currently open chat, or navigate to a contact first."""
         try:
+            # Always ensure WhatsApp is open and focused first
+            self._open_url("whatsapp://")
+            if not self._ensure_whatsapp_focused(timeout=6.0):
+                return "WhatsApp did not open in time."
+
             # If a contact name was provided, navigate to their chat first
             if contact:
-                self._open_url("whatsapp://")
-                if not self._ensure_whatsapp_focused(timeout=6.0):
-                    return "WhatsApp did not open in time."
                 self._navigate_to_contact(contact)
-                time.sleep(1.0)
+                time.sleep(1.5)
+            else:
+                time.sleep(0.5)
 
-            if not _pywinauto_available:
-                from core.screen_reader import screen_reader
-                return screen_reader.read_screen("Please read the most recent WhatsApp messages visible on the screen. Format as 'Name: Message'")
-
-            app = Application(backend="uia").connect(title_re=".*WhatsApp.*", timeout=3)
-            dlg = app.top_window()
-            dlg.set_focus()
-
-            # Find the message list
-            list_items = dlg.descendants(control_type="ListItem")
-            messages = []
-
-            for item in list_items[-10:]:
-                texts = [child.window_text() for child in item.children() if child.window_text()]
-                if texts:
-                    msg = " ".join(texts).strip()
-                    if msg and len(msg) > 1 and "read" not in msg.lower():
-                        messages.append(msg)
-
-            if messages:
-                recent = "\n".join(messages[-3:])
-                source = f" from {contact}" if contact else ""
-                return f"Recent messages{source}:\n{recent}"
-            return "Could not read messages. Chat might be empty or UI changed."
+            # Pywinauto's descendants() search on WhatsApp's UI tree takes 30+ seconds and causes timeouts.
+            # Using the native Vision Agent (screen_reader) is 10x faster and more accurate.
+            from core.screen_reader import screen_reader
+            return screen_reader.read_screen(f"Please read the most recent WhatsApp messages visible on the screen. Format as 'Name: Message'.")
         except Exception as e:
             return f"Failed to read chat (ensure WhatsApp Desktop is open and focused): {e}"
 
