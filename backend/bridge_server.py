@@ -711,11 +711,12 @@ async def _send_greeting_delayed(greeting: str, is_switch: bool = False):
         async def _gather_context():
             try:
                 from core.camera_vision import camera_vision
-                from core.screen_reader import screen_reader
                 
                 logger.info("Gathering startup context in background...")
                 emotion_ctx = await asyncio.to_thread(camera_vision.analyze_emotion)
-                screen_ctx = await asyncio.to_thread(screen_reader.read_screen, "Summarize what's on the screen briefly in 1 sentence.")
+                
+                # Disabled screen reading at startup to save Gemini Free Tier API Quota
+                screen_ctx = None
                 
                 ctx_strings = []
                 if emotion_ctx and "error" not in emotion_ctx.lower() and "429" not in emotion_ctx:

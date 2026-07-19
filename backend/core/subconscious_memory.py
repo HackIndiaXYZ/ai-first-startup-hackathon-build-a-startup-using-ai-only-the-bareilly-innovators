@@ -27,13 +27,15 @@ class SubconsciousMemory:
             chat_log = "\n".join(transcript)
             prompt = f"Analyze this conversation. Extract ONLY persistent factual preferences or habits about the user (e.g., likes dark mode, hates spicy food, works late). Return as a list of bullet points. If nothing significant, return 'NONE'.\n{chat_log}"
             
-            result = await text_llm.complete(prompt=prompt, system="You are the Subconscious. Extract implicit facts.")
-            if "NONE" not in result and result.strip():
-                for line in result.split("\n"):
-                    fact = line.strip("-* ")
-                    if fact:
-                        memory_vault.remember(fact)
-                        logger.info(f"[Subconscious] Extracted implicit fact: {fact}")
+            # [API QUOTA SAVER] Disabled background LLM memory extraction
+            # result = await text_llm.complete(prompt=prompt, system="You are the Subconscious. Extract implicit facts.")
+            # if "NONE" not in result and result.strip():
+            #     for line in result.split("\n"):
+            #         fact = line.strip("-* ")
+            #         if fact:
+            #             memory_vault.remember(fact)
+            #             logger.info(f"[Subconscious] Extracted implicit fact: {fact}")
+            return
         except Exception as e:
             logger.debug(f"[Subconscious] error: {e}")
 
