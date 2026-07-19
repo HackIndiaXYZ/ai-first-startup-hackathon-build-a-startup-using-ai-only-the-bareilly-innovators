@@ -11,7 +11,12 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger("sivi.workflow")
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
+import sys
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(BASE_DIR, "data")
 WORKFLOW_FILE = os.path.join(DATA_DIR, "sivi_workflows.json")
 
 # Built-in default workflows

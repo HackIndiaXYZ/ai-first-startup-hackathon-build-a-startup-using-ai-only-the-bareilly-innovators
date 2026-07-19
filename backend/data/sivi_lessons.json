@@ -16,5 +16,14 @@
     "severity": "high",
     "hit_count": 1,
     "last_seen": "2026-07-01T12:21:03.657285"
+  },
+  {
+    "timestamp": "2026-07-15T00:17:49.844058",
+    "source": "user_correction",
+    "lesson": "User said 'voice nahi kar sakta hai' to correct Sivi. Sivi's last response was: 'Boss, voice recognition bilkul ho sakta hai. Kya aap Abhinav ki voice ko identify karne ke liye keh '",
+    "cmd_type": "USER_CORRECTION",
+    "severity": "high",
+    "hit_count": 1,
+    "last_seen": "2026-07-15T00:17:49.844058"
   }
 ]

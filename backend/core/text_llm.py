@@ -26,7 +26,8 @@ from typing import Optional
 
 import httpx
 
-from gemini_key_pool import key_pool
+from core.gemini_key_pool import key_pool
+from core.offline_fallback import offline_fallback
 
 logger = logging.getLogger("sivi.text_llm")
 
@@ -65,6 +66,8 @@ class TextLLM:
     def __init__(self, model: str = DEFAULT_TEXT_MODEL) -> None:
         self.model = model
         self._url = GEMINI_REST_BASE.format(model=model)
+        # Reuse a single HTTP client for connection pooling (TLS handshake reuse)
+        self._http_client = httpx.AsyncClient(timeout=REQUEST_TIMEOUT)
 
     async def complete(
         self,
@@ -99,8 +102,15 @@ class TextLLM:
                 result = await self._call(key, prompt, system, max_tokens, temperature)
                 if result is not None:
                     return result
+                
+                # Attempt Offline Fallback (Ollama)
+                logger.warning("[TextLLM] Attempting offline fallback...")
+                fallback_resp = offline_fallback.generate_offline_response(prompt, system)
+                if fallback_resp:
+                    return "[OFFLINE MODE] " + fallback_resp
+
                 return (
-                    "[Gemini is temporarily rate-limited on all keys. "
+                    "[Gemini is temporarily rate-limited on all keys and offline fallback is unavailable. "
                     "Please wait a moment and try again.]"
                 )
 
@@ -137,37 +147,36 @@ class TextLLM:
         url = f"{self._url}?key={key}"
 
         try:
-            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-                resp = await client.post(url, json=payload)
+            resp = await self._http_client.post(url, json=payload)
 
-                if resp.status_code == 429:
-                    key_pool.report_quota(key)
-                    return None  # Caller rotates to next key
+            if resp.status_code == 429:
+                key_pool.report_quota(key)
+                return None  # Caller rotates to next key
 
-                if resp.status_code in (401, 403, 1008):
-                    key_pool.report_invalid(key)
-                    return None  # Caller rotates to next key
+            if resp.status_code in (401, 403, 1008):
+                key_pool.report_invalid(key)
+                return None  # Caller rotates to next key
 
-                if resp.status_code != 200:
-                    logger.warning(
-                        f"[TextLLM] Unexpected status {resp.status_code} "
-                        f"from key {key[-6:]}: {resp.text[:200]}"
-                    )
-                    return None
+            if resp.status_code != 200:
+                logger.warning(
+                    f"[TextLLM] Unexpected status {resp.status_code} "
+                    f"from key {key[-6:]}: {resp.text[:200]}"
+                )
+                return None
 
-                data = resp.json()
-                candidates = data.get("candidates", [])
-                if not candidates:
-                    logger.warning(f"[TextLLM] Empty candidates in response: {data}")
-                    return "[No response generated]"
+            data = resp.json()
+            candidates = data.get("candidates", [])
+            if not candidates:
+                logger.warning(f"[TextLLM] Empty candidates in response: {data}")
+                return "[No response generated]"
 
-                parts = candidates[0].get("content", {}).get("parts", [])
-                if not parts:
-                    return "[Empty response content]"
+            parts = candidates[0].get("content", {}).get("parts", [])
+            if not parts:
+                return "[Empty response content]"
 
-                text = parts[0].get("text", "").strip()
-                logger.debug(f"[TextLLM] OK via key ...{key[-6:]} ({len(text)} chars)")
-                return text
+            text = parts[0].get("text", "").strip()
+            logger.debug(f"[TextLLM] OK via key ...{key[-6:]} ({len(text)} chars)")
+            return text
 
         except httpx.TimeoutException:
             logger.warning(f"[TextLLM] Timeout on key ...{key[-6:]}")

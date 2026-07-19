@@ -1,11 +1,28 @@
+import sys
 import os
 import time
 import requests
 import psutil
 from dotenv import load_dotenv
+
+if getattr(sys, 'frozen', False):
+    BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+else:
+    # When run directly as a subprocess, __file__ is backend/core/background_monitor.py
+    # so BASE_DIR should be backend/ (one level up from core/)
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Add backend/ to sys.path so direct imports (without 'core.' prefix) work
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+# Also add core/ folder for intra-core imports
+CORE_DIR = os.path.join(BASE_DIR, "core")
+if CORE_DIR not in sys.path:
+    sys.path.insert(0, CORE_DIR)
+
 from notification_monitor import notification_monitor
 
-load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 BRIDGE_URL = os.getenv("BRIDGE_URL", "http://localhost:8000")
 
 class BackgroundMonitor:
@@ -69,7 +86,7 @@ class BackgroundMonitor:
         try:
             new_alerts = notification_monitor.get_new_notifications()
             for alert in new_alerts:
-                self._send_to_bridge(f"[SYSTEM_EVENT: {alert}. Proactively inform the user about this notification.]")
+                self._send_to_bridge(f"[SYSTEM_EVENT: Notification] New alert received: {alert}")
         except Exception as e:
             print(f"Notification check failed: {e}")
 
@@ -77,8 +94,8 @@ class BackgroundMonitor:
         print("Starting Proactive Background Monitor...")
         while True:
             self.check_battery()
-            self.check_notifications()
-            time.sleep(10) # Check every 10 seconds
+            # self.check_notifications() # Disabled to prevent race condition with bridge_server.py
+            time.sleep(1) # Check every 1 second for instant notification delivery
 
 if __name__ == "__main__":
     monitor = BackgroundMonitor()

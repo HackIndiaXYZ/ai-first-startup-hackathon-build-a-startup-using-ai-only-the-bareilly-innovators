@@ -59,6 +59,7 @@ class AudioEngine:
         self._playing = False
         self._muted = False
         self._speaking = False  # True when Sivi is outputting audio
+        self.noise_gate_threshold = 0.01  # RMS threshold below which mic audio is zeroed out
 
         # Playback queue for received audio chunks
         self._playback_queue: queue.Queue[bytes] = queue.Queue()
@@ -144,6 +145,8 @@ class AudioEngine:
                     # Note: Echo suppression is handled entirely in bridge_server.on_mic_chunk
                     if not self._muted:
                         if self.on_audio_chunk:
+                            if rms < self.noise_gate_threshold:
+                                pcm_bytes = b'\x00' * len(pcm_bytes)
                             self.on_audio_chunk(pcm_bytes)
         except Exception as e:
             logger.error(f"Mic error (sounddevice): {e}")
@@ -175,6 +178,8 @@ class AudioEngine:
 
                 if not self._muted:
                     if self.on_audio_chunk:
+                        if rms < self.noise_gate_threshold:
+                            pcm_bytes = b'\x00' * len(pcm_bytes)
                         self.on_audio_chunk(pcm_bytes)
 
             stream.stop_stream()

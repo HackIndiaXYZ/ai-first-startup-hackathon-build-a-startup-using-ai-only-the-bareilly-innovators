@@ -1,63 +1,101 @@
-import logging
-import asyncio
+"""
+SIVI AI — Notification Monitor
+Tracks Windows system notifications using winsdk.
+Falls back gracefully if winsdk is not available.
+"""
 
-try:
-    from winsdk.windows.ui.notifications.management import UserNotificationListener
-    _WINSDK_AVAILABLE = True
-except ImportError:
-    _WINSDK_AVAILABLE = False
+import logging
+import time
+from typing import List
 
 logger = logging.getLogger("sivi.notification_monitor")
 
+try:
+    import winsdk.windows.ui.notifications.management as mgmt
+    _winsdk_available = True
+except (ImportError, OSError):
+    _winsdk_available = False
+
+
 class NotificationMonitor:
+    """
+    Monitors Windows system notifications.
+    Returns new notifications since last check.
+    Includes 3-second debounce to batch rapid-fire notifications from the same app.
+    """
+
     def __init__(self):
-        self.seen_ids = set()
-        self.first_run = True
+        self._seen_ids: set = set()
+        self._last_check: float = time.time()
+        self._recent_app_alerts: dict = {}  # app_name -> last_alert_timestamp (for debounce)
+        self._debounce_window: float = 3.0  # seconds — batch notifications within this window
 
-    async def _get_new_notifications_async(self) -> list:
-        if not _WINSDK_AVAILABLE:
+    def get_new_notifications(self) -> List[str]:
+        """
+        Return a list of new notification summary strings since the last call.
+        Returns empty list if winsdk is unavailable.
+        Debounces: if the same app fires multiple notifications within 3 seconds,
+        only the first one is reported.
+        """
+        if not _winsdk_available:
             return []
-            
+
         try:
-            listener = UserNotificationListener.current
-            status = await listener.request_access_async()
-            
-            if status != 1: # 1 means Allowed
+            listener = mgmt.UserNotificationListener.current
+            # Wrap the async WinSDK call with a safety timeout
+            try:
+                notifications = listener.get_notifications_async(
+                    mgmt.NotificationKinds.TOAST
+                ).get()
+            except Exception as e:
+                logger.debug(f"[NotificationMonitor] WinSDK get_notifications timed out or failed: {e}")
                 return []
 
-            notifs = await listener.get_notifications_async(1) # 1 = Toast
+            now = time.time()
             new_alerts = []
-            
-            for n in notifs:
-                if n.id not in self.seen_ids:
-                    self.seen_ids.add(n.id)
-                    
-                    if not self.first_run:
-                        app_name = n.app_info.display_info.display_name if n.app_info else "System"
-                        bindings = n.notification.visual.bindings
-                        text = ""
-                        if bindings:
-                            text_elements = bindings[0].get_text_elements()
-                            text = " ".join([t.text for t in text_elements])
-                        
-                        if text:
-                            new_alerts.append(f"Notification from {app_name}: {text}")
-            
-            self.first_run = False
+            for notif in notifications:
+                nid = notif.id
+                if nid not in self._seen_ids:
+                    self._seen_ids.add(nid)
+                    try:
+                        app_name = notif.app_info.display_info.display_name or "Unknown App"
+                    except Exception:
+                        app_name = "Unknown App"
+
+                    # Debounce: skip if same app alerted within the last 3 seconds
+                    last_time = self._recent_app_alerts.get(app_name, 0)
+                    if now - last_time < self._debounce_window:
+                        continue  # Skip this notification (batched)
+                    self._recent_app_alerts[app_name] = now
+
+                    try:
+                        binding = notif.notification.visual.get_binding("ToastGeneric")
+                        texts = []
+                        if binding:
+                            for element in binding.get_text_elements():
+                                texts.append(element.text)
+                        summary = " — ".join(texts) if texts else "New notification"
+                    except Exception:
+                        summary = "New notification"
+
+                    new_alerts.append(f"{app_name}: {summary}")
+
+            # Prevent unbounded memory growth
+            if len(self._seen_ids) > 500:
+                self._seen_ids = set(list(self._seen_ids)[-300:])
+
+            # Clean up old debounce entries (older than 30 seconds)
+            self._recent_app_alerts = {
+                k: v for k, v in self._recent_app_alerts.items()
+                if now - v < 30.0
+            }
+
             return new_alerts
+
         except Exception as e:
-            print(f"Notification read error: {e}")
+            logger.debug(f"[NotificationMonitor] Failed to read notifications: {e}")
             return []
 
-    def get_new_notifications(self) -> list:
-        """Run async notification fetch safely from any context."""
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(asyncio.run, self._get_new_notifications_async())
-            try:
-                return future.result(timeout=10)
-            except Exception as e:
-                logger.error(f"Notification fetch error: {e}")
-                return []
 
+# Module-level singleton
 notification_monitor = NotificationMonitor()

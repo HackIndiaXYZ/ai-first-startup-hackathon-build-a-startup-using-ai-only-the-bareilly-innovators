@@ -1,9 +1,0 @@
-{
-    "name": "Calculator Plugin",
-    "version": "1.0.0",
-    "author": "SIVI Dev",
-    "description": "Basic math calculator via voice",
-    "commands": ["calculate", "math"],
-    "enabled": true,
-    "dependencies": []
-}

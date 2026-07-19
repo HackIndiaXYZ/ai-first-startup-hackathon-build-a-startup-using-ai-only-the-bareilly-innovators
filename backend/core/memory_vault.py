@@ -3,12 +3,16 @@ import json
 import logging
 import uuid
 import chromadb
+import sys
 
 logger = logging.getLogger("sivi.memory_vault")
 
 class MemoryVault:
     def __init__(self):
-        self.data_dir = os.path.join(os.path.dirname(__file__), "..", "data")
+        if getattr(sys, 'frozen', False):
+            self.data_dir = os.path.join(os.path.dirname(sys.executable), "data")
+        else:
+            self.data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
         os.makedirs(self.data_dir, exist_ok=True)
         self.chroma_path = os.path.join(self.data_dir, "chroma")
         
@@ -47,10 +51,17 @@ class MemoryVault:
             return "My vector memory system is offline."
             
         try:
-            # Check if already exists (exact match fallback)
-            results = self.collection.get(where_document={"$contains": fact})
-            if results['documents']:
-                return "I already have that in my memory."
+            fact = fact.strip()
+            if not fact:
+                return "Nothing to remember."
+            
+            # Check for semantic duplicates using ChromaDB's built-in similarity search
+            # A distance < 0.3 means the fact is extremely similar to an existing one
+            results = self.collection.query(query_texts=[fact], n_results=1)
+            if results['documents'] and results['documents'][0]:
+                distances = results.get('distances', [[1.0]])
+                if distances and distances[0] and distances[0][0] < 0.3:
+                    return "I already have something very similar in my memory."
                 
             self.collection.add(
                 documents=[fact],
@@ -63,7 +74,7 @@ class MemoryVault:
 
     def forget_all(self) -> str:
         """Clear all vector memories."""
-        if not self.client:
+        if not self.client or not self.collection:
             return "Memory system is offline."
             
         try:
@@ -90,13 +101,14 @@ class MemoryVault:
         if not self.collection:
             return ""
         try:
-            # Get all documents (limited to 20 for prompt size safety)
-            results = self.collection.get(limit=20)
+            # Limit to 50 most recent memories to avoid bloating the system prompt
+            # (Gemini has 1M+ tokens but sending 1000 memories wastes quota unnecessarily)
+            results = self.collection.get(limit=50)
             docs = results.get('documents', [])
             if not docs:
                 return ""
             
-            return "THINGS YOU MUST REMEMBER ABOUT THE USER:\n- " + "\n- ".join(docs)
+            return "THINGS YOU MUST REMEMBER ABOUT THE USER (Deep Memory):\n- " + "\n- ".join(docs)
         except Exception as e:
             logger.error(f"Error getting memory context: {e}")
             return ""

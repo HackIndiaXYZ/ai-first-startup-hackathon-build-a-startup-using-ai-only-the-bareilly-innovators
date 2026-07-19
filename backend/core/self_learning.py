@@ -22,7 +22,12 @@ from collections import Counter
 
 logger = logging.getLogger("sivi.self_learning")
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
+import sys
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(BASE_DIR, "data")
 ERROR_JOURNAL_FILE = os.path.join(DATA_DIR, "sivi_error_journal.json")
 LESSON_BOOK_FILE = os.path.join(DATA_DIR, "sivi_lessons.json")
 
@@ -352,8 +357,8 @@ Do NOT repeat the same failing command."""
             reverse=True,
         )
         
-        # Take top 10 most important lessons
-        top_lessons = sorted_lessons[:10]
+        # Take top 50 most important lessons (Deep Learning)
+        top_lessons = sorted_lessons[:50]
         
         if not top_lessons:
             return ""

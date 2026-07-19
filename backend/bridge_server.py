@@ -25,9 +25,6 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 import uvicorn
 
-# Load environment variables
-load_dotenv()
-
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
@@ -36,8 +33,54 @@ logging.basicConfig(
 )
 logger = logging.getLogger("sivi.bridge")
 
+import queue
+
+# Thread-safe queue for self-monitoring errors
+error_log_queue = queue.Queue()
+_last_error_time = 0.0
+
+class SiviErrorLogHandler(logging.Handler):
+    """
+    Custom logging handler that intercepts ERROR level logs and queues them
+    so Sivi can self-monitor and react to her own crashes via Gemini Live.
+    """
+    def emit(self, record):
+        global _last_error_time
+        try:
+            # Ignore 429 quota errors to prevent infinite loops (Gemini reacting to Gemini being out of quota)
+            if "429" in str(record.msg):
+                return
+                
+            # Rate limiting: maximum 1 error forwarded to Gemini per 15 seconds
+            current_time = time.time()
+            if current_time - _last_error_time < 15.0:
+                return
+                
+            msg = self.format(record)
+            
+            # Keep it concise for Gemini
+            short_msg = msg[:300] + ("..." if len(msg) > 300 else "")
+            error_log_queue.put(short_msg)
+            _last_error_time = current_time
+        except Exception:
+            pass
+
+# Attach self-monitoring handler to the root logger
+sivi_monitor_handler = SiviErrorLogHandler()
+sivi_monitor_handler.setLevel(logging.ERROR)
+logging.getLogger().addHandler(sivi_monitor_handler)
+
+if getattr(sys, 'frozen', False):
+    # PyInstaller creates a temp folder and stores path in _MEIPASS
+    BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # Add core/ to path FIRST so all core imports resolve
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "core"))
+sys.path.insert(0, os.path.join(BASE_DIR, "core"))
+
+# Load environment variables
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 from core.gemini_live_client import GeminiLiveClient, MODELS, VOICES
 from core.audio_engine import AudioEngine
@@ -170,6 +213,10 @@ def broadcast_sync(event: dict):
         asyncio.run_coroutine_threadsafe(broadcast(event), _main_loop)
 
 
+_wake_word_active = True   # ALWAYS TRUE (Wake Word Gate Disabled)
+_in_active_session = True  # ALWAYS TRUE
+
+
 # ══════════════════════════════════════════════════════════════════
 # GEMINI LIVE + AUDIO CALLBACKS
 # ══════════════════════════════════════════════════════════════════
@@ -192,15 +239,30 @@ def on_gemini_disconnected():
 
 def on_audio_received(pcm_bytes: bytes):
     """Received audio from Gemini -> queue for speaker playback."""
-    if audio_engine:
+    global _wake_word_active
+    if audio_engine and _wake_word_active:
         audio_engine.queue_audio(pcm_bytes)
 
 
 def on_input_transcript(text: str):
     """User speech transcription fragment."""
+    global _wake_word_active, _in_active_session
     broadcast_sync({"type": "input_transcript", "text": text})
+    
+    WAKE_WORDS = ["sivi", "hey sivi", "oi sivi", "sivi!", "hey sivi,"]
+    text_lower = text.lower().strip()
+    wake_detected = any(w in text_lower for w in WAKE_WORDS)
+
+    if wake_detected and not _wake_word_active:
+        _wake_word_active = True
+        _in_active_session = True
+        logger.info(f"[WakeGate] 🟢 Wake word detected: '{text}'")
+        sivi_state["status_text"] = "Sun rahi hoon..."
+        broadcast_sync({"type": "state", **sivi_state})
+
     # Smart Barge-in: If the user speaks actual words while Sivi is talking, interrupt instantly!
-    if text.strip() and audio_engine and audio_engine.is_speaking:
+    # Only interrupt if the wake word is active/open
+    if _wake_word_active and text.strip() and audio_engine and audio_engine.is_speaking:
         logger.info(f"User interrupted Sivi with: '{text}'. Clearing playback queue.")
         audio_engine.clear_playback_queue()
 
@@ -212,38 +274,61 @@ def on_output_transcript(text: str):
 
 def on_turn_complete(user_text: str, sivi_text: str):
     """Full turn complete — add to chat and parse commands."""
+    global _wake_word_active, _in_active_session
     logger.info(f"Turn: User='{user_text[:60]}' | Sivi='{sivi_text[:60]}'")
 
     # Extract PC Commands from Sivi's text
     extracted_cmds = []
     if sivi_text:
         # Find all command tags (e.g. [CMD: open notepad] [CMD: snap to left])
-        matches = re.finditer(r'\[CMD:\s*(.*?)\]', sivi_text, re.IGNORECASE)
+        # Also handles cases with backticks or spaces before brackets
+        matches = re.finditer(r'\[\s*CMD:\s*(.*?)\s*\]', sivi_text, re.IGNORECASE)
         for match in matches:
             cmd_val = match.group(1).strip()
             # Clean up nested tags if model hallucinates them (e.g. [CMD: [CMD: open vscode]])
-            if cmd_val.upper().startswith("[CMD:"):
-                cmd_val = cmd_val[5:].strip()
+            while True:
+                if cmd_val.upper().startswith("[CMD:"):
+                    cmd_val = cmd_val[5:].strip()
+                elif cmd_val.upper().startswith("CMD:"):
+                    cmd_val = cmd_val[4:].strip()
+                else:
+                    break
                 if cmd_val.endswith("]"):
                     cmd_val = cmd_val[:-1].strip()
-            if cmd_val.upper().startswith("CMD:"):
-                cmd_val = cmd_val[4:].strip()
 
-            if cmd_val not in extracted_cmds:
+            if cmd_val and cmd_val not in extracted_cmds:
                 extracted_cmds.append(cmd_val)
-        # Remove the command tags from the visible text
-        sivi_text = re.sub(r'\[CMD:\s*.*?\]', '', sivi_text, flags=re.IGNORECASE).strip()
+        # Remove the command tags from the visible text, including optional surrounding backticks
+        sivi_text = re.sub(r'`?\[\s*CMD:\s*.*?\]`?', '', sivi_text, flags=re.IGNORECASE).strip()
+
+    # Fix #7: Only add user speech to the visible chat if the wake word was detected.
+    # Background conversations (no wake word) are still transcribed by Gemini internally
+    # so she can recall them, but we don't pollute the UI with them.
+    WAKE_WORDS_CHECK = ["sivi", "hey sivi", "oi sivi", "sivi!"]
+    user_lower_text = user_text.lower() if user_text else ""
+    user_addressed_sivi = any(w in user_lower_text for w in WAKE_WORDS_CHECK)
+    
+    # If we are in an active multi-turn session, assume the user is still addressing Sivi
+    if _in_active_session:
+        user_addressed_sivi = True
 
     # Add to chat
-    if user_text:
+    if user_text and user_addressed_sivi:
         msg_user = {"text": user_text, "is_user": True, "timestamp": time.time()}
         chat_messages.append(msg_user)
         broadcast_sync({"type": "chat_message", **msg_user})
 
     if sivi_text:
         msg_sivi = {"text": sivi_text, "is_user": False, "timestamp": time.time()}
-        # Deduplication: skip if identical to last Sivi message
-        if not chat_messages or chat_messages[-1].get("text") != sivi_text:
+        # Fix #13: Deduplicate using a short time window (0.5s) instead of exact text match,
+        # so repeated valid identical responses (e.g. "Done Boss!") are not silently dropped.
+        last = chat_messages[-1] if chat_messages else {}
+        is_duplicate = (
+            last.get("text") == sivi_text
+            and not last.get("is_user")
+            and (time.time() - last.get("timestamp", 0)) < 0.5
+        )
+        if not is_duplicate:
             chat_messages.append(msg_sivi)
             broadcast_sync({"type": "chat_message", **msg_sivi})
 
@@ -337,14 +422,15 @@ def on_turn_complete(user_text: str, sivi_text: str):
                     continue
 
                 try:
-                    # Check if AgentOrchestrator should handle this (RAG, complex logic)
+                    # Fix #12: Pass user_text (original user sentence) to AgentOrchestrator
+                    # so intent-based keyword matching (e.g. "document", "analyze code") works correctly.
                     async def async_speak(res_text):
                         if res_text and gemini_client and gemini_client.is_connected:
                             await gemini_client.send_text(f"System result for the user: {res_text}")
 
-                    is_handled = await orchestrator.route_task(extracted_cmd, async_speak)
+                    is_handled = await orchestrator.route_task(user_text, async_speak)
                     if is_handled:
-                        logger.info(f"Command routed to background agent: {extracted_cmd}")
+                        logger.info(f"Command routed to background agent for user intent: {user_text[:60]}")
                         continue
                         
                     # Offload blocking execution to a separate thread with a failsafe timeout
@@ -442,13 +528,13 @@ def on_turn_complete(user_text: str, sivi_text: str):
                             "READ_CLIPBOARD", "READ_WINDOWS", "ANALYZE_EMOTION", "ANALYZE_WELLNESS", "DESCRIBE_SCENE",
                             "SYSTEM_STATUS", "GET_WEATHER", "READ_SCREEN", "NEWS", "SEARCH", "OPEN_APP",
                             "FIND_FILE", "LIST_FILES", "CALENDAR_EVENTS", "CREATE_EVENT",
-                            "MEDICAL_ADVICE", "WRITE_CLIPBOARD", "CLOSE_APP", "SWITCH_APP", "TYPE_TEXT",
+                            "WRITE_CLIPBOARD", "CLOSE_APP", "SWITCH_APP", "TYPE_TEXT",
                             "PRESS_KEY", "SCREENSHOT", "VOLUME_SET", "SET_TIMER",
                             "CREATE_FILE", "CREATE_FOLDER", "DELETE_FILE", "OPEN_FILE",
                             "MINIMIZE_WINDOW", "MAXIMIZE_WINDOW", "SNAP_LEFT", "SNAP_RIGHT",
                             "TAB_NEXT", "TAB_PREV", "TAB_NEW", "TAB_CLOSE",
                             "WIFI_ON", "WIFI_OFF", "BLUETOOTH_ON", "BLUETOOTH_OFF",
-                            "REMEMBER", "FORGET_ALL", "SEND_EMAIL", "SEND_WHATSAPP", "WHATSAPP_READ_CHAT",
+                            "REMEMBER", "FORGET_ALL", "SEND_WHATSAPP", "WHATSAPP_READ_CHAT",
                             "PLAY_YOUTUBE", "PLAY_SPOTIFY", "LOCK_SCREEN", "VOLUME_UP", "VOLUME_DOWN",
                             "MUTE", "BRIGHTNESS_UP", "BRIGHTNESS_DOWN", "MEDIA_PLAY_PAUSE",
                             "MEDIA_NEXT", "MEDIA_PREV", "SLEEP", "SHUTDOWN",
@@ -509,6 +595,10 @@ def on_turn_complete(user_text: str, sivi_text: str):
         if _main_loop:
             asyncio.run_coroutine_threadsafe(_execute_and_feedback(), _main_loop)
 
+    # Keep Sivi awake for the next turn
+    _wake_word_active = True
+    _in_active_session = True
+
     # Update state
     sivi_state["orb_state"] = "listening"
     sivi_state["status_text"] = "Sun rahi hoon..."
@@ -559,6 +649,9 @@ def on_mic_chunk(pcm_bytes: bytes):
     # Prevent Sivi from hearing her own voice through the speakers (Acoustic Echo)
     if audio_engine and audio_engine.is_speaking:
         return
+
+    # ── WAKE GATE DISABLED: Always send mic audio to Gemini ──
+    pass
 
     if gemini_client and gemini_client.is_connected and _main_loop is not None:
         try:
@@ -623,6 +716,14 @@ async def start_voice_session(is_switch: bool = False):
         temperature=settings.get("temperature", 0.9),
     )
 
+    # Monkey-patch gemini_client.send_text to always wake her up for system prompts
+    _original_send_text = gemini_client.send_text
+    async def _waking_send_text(text: str):
+        global _wake_word_active
+        _wake_word_active = True
+        await _original_send_text(text)
+    gemini_client.send_text = _waking_send_text
+
     # Wire callbacks
     gemini_client.on_connected = on_gemini_connected
     gemini_client.on_disconnected = on_gemini_disconnected
@@ -645,6 +746,10 @@ async def start_voice_session(is_switch: bool = False):
         # Start autonomous sensory empathy
         from core.sensory_orchestrator import sensory_orchestrator
         sensory_orchestrator.start(gemini_client.send_text)
+
+        # Fix #11: Start Always-On background agents (HackerNews monitor etc.)
+        agents.start(controller, gemini_client.send_text)
+        logger.info("[Agents] Always-On background agents started.")
 
         audio_engine.start_recording()
         audio_engine.start_playback()
@@ -700,37 +805,12 @@ async def _send_greeting_delayed(greeting: str, is_switch: bool = False):
             await broadcast({"type": "state", **sivi_state})
             return
 
-        # Send greeting IMMEDIATELY — don't wait for camera/screen
-        greeting_prompt = f"System: The system has just booted up. Greet the user out loud immediately. Your name is Sivi. Use this baseline greeting style based on the time: '{greeting}'. ALSO, explicitly tell the user that you have deeply and fully checked all their system notifications properly. Keep it natural, caring, and concise (2 sentences max)."
+        # Send greeting IMMEDIATELY
+        greeting_prompt = f"System: The system has just booted up. Greet the user out loud warmly and lovingly. Your name is Sivi. Use this baseline greeting style based on the time: '{greeting}'. Keep it natural, caring, and concise (2 sentences max)."
         await gemini_client.send_text(greeting_prompt)
         sivi_state["orb_state"] = "thinking"
         sivi_state["status_text"] = "Soch rahi hoon..."
         await broadcast({"type": "state", **sivi_state})
-
-        # Gather camera/screen context in background and send as a follow-up
-        async def _gather_context():
-            try:
-                from core.camera_vision import camera_vision
-                
-                logger.info("Gathering startup context in background...")
-                emotion_ctx = await asyncio.to_thread(camera_vision.analyze_emotion)
-                
-                # Disabled screen reading at startup to save Gemini Free Tier API Quota
-                screen_ctx = None
-                
-                ctx_strings = []
-                if emotion_ctx and "error" not in emotion_ctx.lower() and "429" not in emotion_ctx:
-                    ctx_strings.append(f"User's current mood from webcam: '{emotion_ctx}'.")
-                if screen_ctx and "error" not in screen_ctx.lower() and "429" not in screen_ctx:
-                    ctx_strings.append(f"User's screen shows: '{screen_ctx}'.")
-                
-                if ctx_strings and gemini_client and gemini_client.is_connected:
-                    ctx_msg = f"[BACKGROUND CONTEXT UPDATE: {' '.join(ctx_strings)} Use this context silently to inform future responses. Do NOT speak about this unless the user asks.]"
-                    await gemini_client.send_text(ctx_msg)
-            except Exception as e:
-                logger.error(f"Background context error: {e}")
-        
-        asyncio.create_task(_gather_context())
 
 
 async def stop_voice_session():
@@ -774,26 +854,106 @@ async def stop_voice_session():
 async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
     global _main_loop
-    # Capture the event loop at startup for thread-safe callbacks
     _main_loop = asyncio.get_running_loop()
     logger.info("Sivi Bridge Server starting... Event loop captured.")
     
     # Start background tasks
-    notif_task = asyncio.create_task(notification_worker())
-    health_task = asyncio.create_task(system_health_worker())
-    telemetry_task = asyncio.create_task(dashboard_telemetry_worker())
+    notif_task          = asyncio.create_task(notification_worker())
+    health_task         = asyncio.create_task(system_health_worker())
+    telemetry_task      = asyncio.create_task(dashboard_telemetry_worker())
+    self_monitoring_task= asyncio.create_task(self_monitoring_worker())
     
-    # Start always-on background agents
-    agents.start(controller)
+    # Always-on agents
+    async def safe_agent_callback(msg):
+        global gemini_client
+        if gemini_client and gemini_client.is_connected:
+            await gemini_client.send_text(msg)
+    agents.start(controller, safe_agent_callback)
+
+    # ── Phase 3: Mobile Handoff — start Telegram polling ──────────────
+    def _mobile_cmd_callback(text: str):
+        """Inject phone command into Gemini Live stream."""
+        if gemini_client and gemini_client.is_connected and _main_loop:
+            asyncio.run_coroutine_threadsafe(
+                gemini_client.send_text(text), _main_loop
+            )
+        else:
+            logger.warning(f"[MobileHandoff] Gemini not connected, dropping: {text}")
+
+    try:
+        from core.mobile_handoff import mobile_handoff
+        mobile_handoff.start_polling(_mobile_cmd_callback)
+        if mobile_handoff.is_configured():
+            logger.info("[MobileHandoff] ✅ Telegram polling active — phone commands enabled.")
+        else:
+            logger.info("[MobileHandoff] Telegram not configured (TELEGRAM_BOT_TOKEN missing).")
+    except Exception as mob_e:
+        logger.error(f"[MobileHandoff] Failed to start polling: {mob_e}")
+
+    auto_voice_task = asyncio.create_task(_auto_start_voice_on_boot())
     
     yield
     
     notif_task.cancel()
     health_task.cancel()
     telemetry_task.cancel()
+    self_monitoring_task.cancel()
+    auto_voice_task.cancel()
     agents.stop()
+
+    # Stop mobile polling
+    try:
+        from core.mobile_handoff import mobile_handoff
+        mobile_handoff.stop_polling()
+    except Exception:
+        pass
+
     logger.info("Shutting down Sivi...")
     await stop_voice_session()
+
+
+async def _auto_start_voice_on_boot():
+    """
+    Automatically start the Gemini Live voice session 5 seconds after server boot.
+    This makes Sivi begin listening immediately after install/restart —
+    no need to open the dashboard and click 'Start Voice'.
+    Waits for an API key to be available before attempting.
+    """
+    await asyncio.sleep(5)  # Let server fully initialize first
+    try:
+        from core.gemini_key_pool import key_pool
+        if key_pool.key_count == 0:
+            logger.warning("[AutoStart] No Gemini API key found — skipping auto-start voice.")
+            return
+    except Exception:
+        api_key = settings.get("api_key", "")
+        if not api_key:
+            logger.warning("[AutoStart] No API key in settings — skipping auto-start voice.")
+            return
+
+    if sivi_state.get("is_connected"):
+        logger.info("[AutoStart] Voice already connected — skipping.")
+        return
+
+    logger.info("[AutoStart] Auto-starting voice session on boot...")
+    try:
+        result = await start_voice_session()
+        if result and "error" not in result:
+            logger.info(f"[AutoStart] Voice session started: {result}")
+            
+            # Send a trigger to Gemini to wish the user based on time
+            from datetime import datetime
+            hour = datetime.now().hour
+            time_of_day = "morning" if 5 <= hour < 12 else "afternoon" if 12 <= hour < 17 else "evening/night"
+            
+            greeting_prompt = f"[SYSTEM ALERT: The user's PC has just booted up and Sivi started. Warmly and affectionately wish the user good {time_of_day}. Keep it short and loving.]"
+            if gemini_client and gemini_client.is_connected:
+                await gemini_client.send_text(greeting_prompt)
+                
+        else:
+            logger.error(f"[AutoStart] Voice start failed: {result}")
+    except Exception as e:
+        logger.error(f"[AutoStart] Exception during auto voice start: {e}")
 
 async def dashboard_telemetry_worker():
     """Background task to push real-time system stats to the dashboard."""
@@ -897,11 +1057,11 @@ async def notification_worker():
     from core.notification_monitor import notification_monitor
     while True:
         try:
-            await asyncio.sleep(5)
+            await asyncio.sleep(1)
             if sivi_state.get("is_connected") and gemini_client and gemini_client.is_connected:
                 # Only alert if we aren't currently speaking (to avoid interrupting too much)
                 if sivi_state.get("orb_state") in ["listening", "idle"]:
-                    alerts = await notification_monitor._get_new_notifications_async()
+                    alerts = await asyncio.to_thread(notification_monitor.get_new_notifications)
                     if alerts:
                         alert_text = " | ".join(alerts)
                         logger.info(f"New Notifications Detected: {alert_text}")
@@ -915,8 +1075,38 @@ async def notification_worker():
             break
         except Exception as e:
             logger.error(f"Notification worker error: {e}")
-            await asyncio.sleep(5)
+            await asyncio.sleep(1)
 
+
+
+async def self_monitoring_worker():
+    """
+    Background worker that continuously pops errors from the error_log_queue
+    and sends them to Sivi's Gemini Live connection for self-diagnosis.
+    """
+    while True:
+        try:
+            await asyncio.sleep(2)
+            if sivi_state.get("is_connected") and gemini_client and gemini_client.is_connected:
+                # Process all pending errors in the queue
+                while not error_log_queue.empty():
+                    error_msg = error_log_queue.get_nowait()
+                    # Disabled by user request: Do not send critical error alerts to Gemini
+                    # prompt = (
+                    #     f"[SYSTEM_EVENT: CRITICAL BACKEND ERROR OCCURRED: {error_msg}. "
+                    #     f"Please acknowledge this error to the user immediately and briefly self-diagnose what might have gone wrong.]"
+                    # )
+                    # await gemini_client.send_text(prompt)
+                    
+                    # sivi_state["orb_state"] = "thinking"
+                    # sivi_state["status_text"] = "Diagnosing error..."
+                    # await broadcast({"type": "state", **sivi_state})
+                    
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            # We don't log this to the main logger to avoid an infinite loop of errors
+            print(f"Self-monitoring worker error: {e}")
 
 
 app = FastAPI(
@@ -952,6 +1142,17 @@ class SettingsUpdateRequest(BaseModel):
     gemini_voice: Optional[str] = None
     temperature: Optional[float] = None
 
+@app.post("/voice/send-text")
+async def receive_text(msg: TextMessageRequest):
+    """Allow external services to inject text into Sivi's stream."""
+    if gemini_client and gemini_client.is_connected:
+        await broadcast({"type": "chat_message", "text": msg.text, "is_user": True, "timestamp": time.time()})
+        await gemini_client.send_text(msg.text)
+        sivi_state["orb_state"] = "thinking"
+        sivi_state["status_text"] = "Soch rahi hoon..."
+        await broadcast({"type": "state", **sivi_state})
+        return {"status": "sent"}
+    return {"status": "not connected"}
 
 # ── REST Endpoints ────────────────────────────────────────────────
 
@@ -1232,12 +1433,12 @@ async def get_agents():
     except ImportError:
         observer_status = "offline (missing 'mss' or 'cv2')"
 
-    from core.notification_monitor import _WINSDK_AVAILABLE
+    from core.notification_monitor import _winsdk_available
     
-    # Check separate processes using psutil
+    # Wake word is integrated into Gemini Live audio engine now
+    wake_word_active = True
+    
     bg_monitor_active = False
-    wake_word_active = False
-    
     for proc in psutil.process_iter(['name', 'cmdline']):
         try:
             cmdline = proc.info.get('cmdline') or []
@@ -1245,8 +1446,6 @@ async def get_agents():
             if 'python' in proc.info.get('name', '').lower() or 'python' in cmd_str:
                 if 'background_monitor.py' in cmd_str:
                     bg_monitor_active = True
-                if 'wake_word_detection.py' in cmd_str:
-                    wake_word_active = True
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             pass
 
@@ -1278,7 +1477,7 @@ async def get_agents():
         {
             "name": "Notification Monitor",
             "description": "Watches Windows notifications seamlessly.",
-            "status": "active" if _WINSDK_AVAILABLE else "offline",
+            "status": "active" if _winsdk_available else "offline",
             "type": "Background Task"
         },
         {
@@ -1312,13 +1511,129 @@ async def get_agents():
 async def get_learning_stats():
     """Return self-learning engine stats, recent errors, and lessons."""
     stats = self_learning.get_stats()
-    recent_errors = self_learning.error_journal[-20:]  # Last 20 errors
+    recent_errors = self_learning.error_journal[-20:]
     lessons = self_learning.lessons
     return {
         "stats": stats,
         "recent_errors": recent_errors,
         "lessons": lessons,
     }
+
+
+# ── Phase 2: Offline Status ───────────────────────────────────────────────────
+
+@app.get("/offline-status")
+async def get_offline_status():
+    """Real-time offline/Ollama status for dashboard."""
+    try:
+        from core.offline_fallback import offline_fallback
+        return offline_fallback.get_status()
+    except Exception as e:
+        return {"error": str(e), "tier": "unknown"}
+
+
+@app.post("/offline-test")
+async def test_offline(req: TextMessageRequest):
+    """Test offline LLM with a prompt."""
+    try:
+        from core.offline_fallback import offline_fallback
+        result = await offline_fallback.complete(req.text)
+        return {"response": result, "status": offline_fallback.get_status()}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ── Phase 3: Mobile Handoff ───────────────────────────────────────────────────
+
+class MobileSendRequest(BaseModel):
+    message: str
+    media_path: Optional[str] = None
+
+@app.get("/mobile-status")
+async def get_mobile_status():
+    """Real-time Telegram/mobile bridge status."""
+    try:
+        from core.mobile_handoff import mobile_handoff
+        return mobile_handoff.get_status()
+    except Exception as e:
+        return {"error": str(e), "configured": False}
+
+
+@app.post("/mobile-send")
+async def send_mobile(req: MobileSendRequest):
+    """Push a message to Boss's phone via Telegram."""
+    try:
+        from core.mobile_handoff import mobile_handoff
+        if req.media_path:
+            ok = await mobile_handoff.send_photo_to_mobile(req.media_path, req.message)
+        else:
+            ok = await mobile_handoff.send_text_async(req.message)
+        return {"status": "sent" if ok else "failed"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/mobile-screenshot")
+async def send_screenshot_to_phone():
+    """Take a screenshot and push to Boss's phone."""
+    try:
+        from core.mobile_handoff import mobile_handoff
+        ok = await mobile_handoff.notify_screenshot()
+        return {"status": "sent" if ok else "failed"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ── Phase 4: Knowledge Graph Data ────────────────────────────────────────────
+
+@app.get("/graph-data")
+async def get_graph_data():
+    """Return knowledge graph as D3.js-compatible node-link format."""
+    try:
+        from core.knowledge_graph import knowledge_graph
+        import networkx as nx
+        G = knowledge_graph.graph
+        nodes = [
+            {
+                "id":    n,
+                "label": n,
+                "size":  max(5, G.degree(n) * 3),
+                "color": "#8b5cf6" if G.degree(n) > 3 else "#3b82f6",
+            }
+            for n in G.nodes()
+        ]
+        links = [
+            {
+                "source":   u,
+                "target":   v,
+                "relation": d.get("relation", "related"),
+                "label":    d.get("relation", ""),
+            }
+            for u, v, d in G.edges(data=True)
+        ]
+        return {
+            "nodes":       nodes,
+            "links":       links,
+            "node_count":  G.number_of_nodes(),
+            "edge_count":  G.number_of_edges(),
+        }
+    except Exception as e:
+        return {"nodes": [], "links": [], "node_count": 0, "edge_count": 0, "error": str(e)}
+
+
+@app.post("/graph-add")
+async def add_graph_relation(req: CommandRequest):
+    """Add a relation triple to the knowledge graph via API."""
+    try:
+        # Expected format: "subject | predicate | object"
+        from core.knowledge_graph import knowledge_graph
+        parts = [p.strip() for p in req.command.split("|")]
+        if len(parts) == 3:
+            result = knowledge_graph.add_relation(parts[0], parts[1], parts[2])
+            return {"status": "added", "result": result}
+        return {"error": "Format: subject | predicate | object"}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 # ── WebSocket Endpoint ────────────────────────────────────────────
@@ -1392,11 +1707,18 @@ async def websocket_endpoint(ws: WebSocket):
 
 from fastapi.staticfiles import StaticFiles
 
-FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "dist"))
+FRONTEND_DEV = os.path.abspath(os.path.join(BASE_DIR, "..", "frontend", "dist"))
+FRONTEND_PROD = os.path.abspath(os.path.join(BASE_DIR, "..", "frontend_dist"))
+
+if os.path.exists(FRONTEND_PROD):
+    FRONTEND_DIR = FRONTEND_PROD
+else:
+    FRONTEND_DIR = FRONTEND_DEV
+
 if os.path.exists(FRONTEND_DIR):
     app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
 else:
-    logger.warning("Frontend dist directory not found. Please run 'npm run build' in the frontend folder.")
+    logger.warning(f"Frontend dist directory not found at {FRONTEND_DIR}. Please run 'npm run build'.")
 
 # ══════════════════════════════════════════════════════════════════
 # BACKGROUND AGENTS

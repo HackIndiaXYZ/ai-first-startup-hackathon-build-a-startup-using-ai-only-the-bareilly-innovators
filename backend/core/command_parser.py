@@ -6,6 +6,7 @@ Returns None if no command matches so Gemini handles it as conversation.
 
 import re
 import string
+import difflib
 from dataclasses import dataclass, field
 
 
@@ -90,7 +91,7 @@ MEDIA_PREV_KEYWORDS = ["previous track", "previous song", "previous video", "las
 SYSTEM_STATUS_KEYWORDS = ["system status", "pc health", "check system", "system kaisa hai",
                           "what time is it", "current time", "what is the date", "aaj ki date",
                           "time kya ho raha hai", "time kya hai", "battery status", "check battery"]
-WEATHER_KEYWORDS = ["weather in", "weather of", "climate in", "mausam kaisa hai"]
+WEATHER_KEYWORDS = ["get weather", "weather in", "weather of", "climate in", "mausam kaisa hai", "weather"]
 REMEMBER_KEYWORDS = ["remember", "yaad rakho", "memorize"]
 FORGET_KEYWORDS = ["forget all", "forget everything", "clear memory", "yaad bhool jao", "memory clear karo"]
 EMOTION_ANALYSIS_KEYWORDS = ["how do i look", "read my face", "check my mood",
@@ -128,6 +129,8 @@ MOUSE_SCROLL_KEYWORDS = ["scroll up", "scroll down"]
 MOUSE_MOVE_KEYWORDS = ["move mouse up", "move mouse down", "move mouse left", "move mouse right"]
 DEV_CMD_KEYWORDS = ["run command", "execute terminal", "run terminal", "terminal mein chalao"]
 DEV_GIT_STATUS_KEYWORDS = ["git status", "check git", "check repository"]
+DEV_GIT_COMMIT_KEYWORDS = ["git commit and push", "auto commit", "commit changes"]
+DEV_RUN_TESTS_KEYWORDS = ["run tests", "execute tests", "run test suite"]
 DEV_KILL_PORT_KEYWORDS = ["kill port", "stop port", "port band karo"]
 DEV_ANALYZE_CODE_KEYWORDS = ["analyze code in", "check bugs in", "find bugs in", "code analyze karo"]
 DEV_GENERATE_CODE_KEYWORDS = ["write code for", "generate code for", "code likho"]
@@ -135,7 +138,15 @@ DEV_EXECUTE_SCRIPT_KEYWORDS = ["execute script to", "write script to", "create s
 DEV_SPAWN_SUBAGENT_KEYWORDS = ["spawn subagent to", "spawn agent to", "monitor in background"]
 DEV_OPEN_EDITOR_KEYWORDS = ["open in editor", "open in vs code", "open in vscode"]
 DEV_CLOSE_EDITOR_KEYWORDS = ["close current file", "close editor tab", "band karo tab"]
+DEV_MONITOR_LOGS_KEYWORDS = ["monitor logs in", "watch logs in", "tail logs for", "crash detective for"]
+DEV_DB_QUERY_KEYWORDS = ["query database", "run sql", "check database"]
+SWARM_KEYWORDS = ["delegate to swarm", "assign background task", "research in background", "background research"]
+GRAPH_ADD_KEYWORDS = ["graph add", "learn relation"]
+GRAPH_QUERY_KEYWORDS = ["graph query", "what do you know about"]
+MOBILE_HANDOFF_KEYWORDS = ["send to phone", "message my phone", "alert me on phone", "push to phone"]
 TIMER_KEYWORDS = ["set timer for", "set alarm for", "timer lagao", "alarm lagao", "remind me in"]
+SCHEDULE_TASK_KEYWORDS = ["schedule task to", "schedule command to", "run this later", "schedule event to"]
+LIST_SCHEDULED_KEYWORDS = ["what is scheduled", "list scheduled tasks", "list my alarms"]
 VOLUME_SET_KEYWORDS = ["set volume to", "volume set karo", "volume ko"]
 TAB_NEXT_KEYWORDS = ["next tab", "agle tab", "go to next tab"]
 TAB_PREV_KEYWORDS = ["previous tab", "pichle tab", "go to previous tab"]
@@ -145,22 +156,99 @@ BROWSER_READ_PAGE_KEYWORDS = ["read this page", "read page", "read website", "we
 BROWSER_FULLSCREEN_KEYWORDS = ["browser full screen", "toggle full screen", "full screen karo", "video full screen", "full screen mode"]
 BROWSER_SCROLL_KEYWORDS = ["scroll page down", "scroll page up", "scroll to top", "scroll to bottom"]
 BROWSER_STATUS_KEYWORDS = ["browser status", "get open tabs", "list tabs", "open tabs", "how many tabs", "check open tabs"]
+UIA_CLICK_KEYWORDS = ["uia click", "native click"]
+UIA_TYPE_KEYWORDS = ["uia type", "native type"]
+UIA_READ_KEYWORDS = ["uia read", "native read", "read app tree"]
 
 
-# ── Cached compiled patterns ──────────────────────────────────────
 
-_compiled_patterns = {}
+class CommandTrie:
+    def __init__(self):
+        self.root = {}
+    
+    def insert(self, phrase: str, cmd_type: str):
+        node = self.root
+        for char in phrase:
+            if char not in node:
+                node[char] = {}
+            node = node[char]
+        node['__cmd__'] = cmd_type
+        
+    def search_longest_prefix(self, text: str):
+        node = self.root
+        last_match_cmd = None
+        last_match_len = -1
+        for i, char in enumerate(text):
+            if char in node:
+                node = node[char]
+                if '__cmd__' in node:
+                    if i + 1 == len(text) or text[i+1] == ' ':
+                        last_match_cmd = node['__cmd__']
+                        last_match_len = i + 1
+            else:
+                break
+        return last_match_cmd, last_match_len
 
+    def search_anywhere(self, text: str):
+        best_cmd, best_kw, best_len = None, "", -1
+        n = len(text)
+        for i in range(n):
+            node = self.root
+            j = i
+            last_cmd, last_len = None, -1
+            while j < n and text[j] in node:
+                node = node[text[j]]
+                if '__cmd__' in node:
+                    if (i == 0 or text[i-1] == ' ') and (j + 1 == n or text[j+1] == ' '):
+                        last_cmd = node['__cmd__']
+                        last_len = j - i + 1
+                j += 1
+            if last_cmd and last_len > best_len:
+                best_cmd, best_len, best_kw = last_cmd, last_len, text[i:i+last_len]
+        return best_cmd, best_kw
 
-def _exact_phrase(text_lower: str, keywords: list) -> bool:
-    key = tuple(keywords)
-    if key not in _compiled_patterns:
-        pattern = r'(?<!\w)(?:' + '|'.join(re.escape(kw) for kw in keywords) + r')(?!\w)'
-        _compiled_patterns[key] = re.compile(pattern)
-    return bool(_compiled_patterns[key].search(text_lower))
+_global_trie = CommandTrie()
+_trie_initialized = False
 
-
+def _init_trie():
+    global _trie_initialized
+    if _trie_initialized: return
+    mapping = {
+        "OPEN_APP": OPEN_KEYWORDS, "CLOSE_APP": CLOSE_KEYWORDS, "SWITCH_APP": SWITCH_APP_KEYWORDS,
+        "VOLUME_UP": VOLUME_UP_KEYWORDS, "VOLUME_DOWN": VOLUME_DOWN_KEYWORDS, "MUTE": MUTE_KEYWORDS,
+        "SCREENSHOT": SCREENSHOT_KEYWORDS, "READ_SCREEN": SCREEN_READ_KEYWORDS, "LOCK_SCREEN": LOCK_KEYWORDS,
+        "SHUTDOWN": SHUTDOWN_KEYWORDS, "RESTART": RESTART_KEYWORDS, "SLEEP": SLEEP_KEYWORDS,
+        "BRIGHTNESS_UP": BRIGHTNESS_UP_KEYWORDS, "BRIGHTNESS_DOWN": BRIGHTNESS_DOWN_KEYWORDS,
+        "PLAY_YOUTUBE": PLAY_KEYWORDS, "SEARCH": SEARCH_KEYWORDS, "TYPE_TEXT": TYPE_KEYWORDS,
+        "CREATE_FILE": FILE_CREATE_KEYWORDS, "DELETE_FILE": FILE_DELETE_KEYWORDS,
+        "CREATE_FOLDER": FOLDER_CREATE_KEYWORDS, "DELETE_FOLDER": FOLDER_DELETE_KEYWORDS,
+        "FIND_FILE": FIND_FILE_KEYWORDS, "LIST_FILES": LIST_FILES_KEYWORDS, "OPEN_FILE": OPEN_FILE_KEYWORDS,
+        "LIST_WINDOWS": LIST_WINDOWS_KEYWORDS, "READ_CLIPBOARD": READ_CLIPBOARD_KEYWORDS,
+        "WRITE_CLIPBOARD": WRITE_CLIPBOARD_KEYWORDS, "MEDIA_PLAY_PAUSE": MEDIA_PLAY_PAUSE_KEYWORDS,
+        "MEDIA_NEXT": MEDIA_NEXT_KEYWORDS, "MEDIA_PREV": MEDIA_PREV_KEYWORDS,
+        "SYSTEM_STATUS": SYSTEM_STATUS_KEYWORDS, "GET_WEATHER": WEATHER_KEYWORDS,
+        "REMEMBER": REMEMBER_KEYWORDS, "FORGET_ALL": FORGET_KEYWORDS,
+        "ANALYZE_EMOTION": EMOTION_ANALYSIS_KEYWORDS, "ANALYZE_WELLNESS": WELLNESS_KEYWORDS,
+        "DESCRIBE_SCENE": DESCRIBE_SCENE_KEYWORDS, "SEND_EMAIL": EMAIL_KEYWORDS,
+        "SEND_WHATSAPP": WHATSAPP_KEYWORDS, "WHATSAPP_READ": WHATSAPP_READ_KEYWORDS,
+        "DEV_RUN_CMD": DEV_CMD_KEYWORDS, "DEV_EXECUTE_SCRIPT": DEV_EXECUTE_SCRIPT_KEYWORDS,
+        "DEV_SPAWN_SUBAGENT": DEV_SPAWN_SUBAGENT_KEYWORDS, "DEV_GIT_STATUS": DEV_GIT_STATUS_KEYWORDS,
+        "SWARM_RUN": SWARM_KEYWORDS, "SWITCH_MODE": SWITCH_MODE_KEYWORDS,
+         "MOBILE_HANDOFF": MOBILE_HANDOFF_KEYWORDS,
+        "SET_TIMER": TIMER_KEYWORDS, "SCHEDULE_TASK": SCHEDULE_TASK_KEYWORDS,
+        "CALENDAR_EVENTS": CALENDAR_KEYWORDS, "UIA_CLICK": UIA_CLICK_KEYWORDS,
+        "UIA_TYPE": UIA_TYPE_KEYWORDS, "UIA_READ": UIA_READ_KEYWORDS,
+        "BROWSER_READ_PAGE": BROWSER_READ_PAGE_KEYWORDS, "BROWSER_FULLSCREEN": BROWSER_FULLSCREEN_KEYWORDS,
+        "BROWSER_STATUS": BROWSER_STATUS_KEYWORDS, "BROWSER_SCROLL": BROWSER_SCROLL_KEYWORDS,
+        "TAB_NEXT": TAB_NEXT_KEYWORDS, "TAB_PREV": TAB_PREV_KEYWORDS, "TAB_NEW": TAB_NEW_KEYWORDS,
+        "TAB_CLOSE": TAB_CLOSE_KEYWORDS, "VOLUME_SET": VOLUME_SET_KEYWORDS
+    }
+    for cmd_type, kw_list in mapping.items():
+        for kw in kw_list:
+            _global_trie.insert(kw.lower(), cmd_type)
+    _trie_initialized = True
 def parse_command(text: str) -> "PCCommand | None":
+    _init_trie()
     if not text or not text.strip():
         return None
 
@@ -236,13 +324,31 @@ def parse_command(text: str) -> "PCCommand | None":
         text_lower = text_lower[:-1]
     text_lower = text_lower.strip()
 
+    # ── Advanced O(1) Trie Routing ────────────────────────────────
+    cmd_type, match_len = _global_trie.search_longest_prefix(text_lower)
+    matched_kw = text_lower[:match_len] if match_len > 0 else ""
+    
+    if not cmd_type:
+        cmd_type, matched_kw = _global_trie.search_anywhere(text_lower)
+        
+        
+    if not cmd_type:
+        return None
+
+    if cmd_type in VALID_NO_PARAM_TYPES:
+        return PCCommand(type=cmd_type)
+
+
     # ── Strip Wake Words / Assistant Names ────────────────────────
-    wake_words_to_strip = ["sivi", "hey sivi", "jarvis", "hey jarvis", "sivi", "hey sivi", "hey"]
+    # Longest-first order to avoid partial stripping (e.g. "hey sivi" before "hey")
+    wake_words_to_strip = ["hey sivi", "hey jarvis", "sivi", "jarvis"]
     for name in wake_words_to_strip:
         if text_lower.startswith(name + " "):
             text_lower = text_lower[len(name):].strip()
+            break  # Only strip once
         elif text_lower == name:
             text_lower = ""
+            break
 
     # ── WiFi / Bluetooth (MUST be before generic open/close) ──────
     if re.search(r'\bwifi\b|\bwi-fi\b|\bwireless\b|\binternet\b', text_lower):
@@ -281,44 +387,54 @@ def parse_command(text: str) -> "PCCommand | None":
     _dev_prefixes = DEV_CMD_KEYWORDS + DEV_EXECUTE_SCRIPT_KEYWORDS + DEV_SPAWN_SUBAGENT_KEYWORDS
     _is_dev_cmd = any(text_lower.startswith(dp) for dp in _dev_prefixes)
     if not _is_dev_cmd:
-        for kw in OPEN_KEYWORDS:
-            if text_lower.startswith(kw + " "):
-                app_name = text_lower[len(kw):].strip()
+        if cmd_type == "OPEN_APP":
+            if True:
+                kw = matched_kw
+                app_name = text_lower.split(kw, 1)[-1].strip()
                 if app_name:
                     # Check if it's an explicit file open request like "open file X"
                     if app_name.startswith("file ") and app_name != "file explorer":
-                        break  # Let OPEN_FILE handle it below
-                    resolved = APP_ALIASES.get(app_name, app_name)
+                        pass  # Handled by longest prefix match
+                    resolved = APP_ALIASES.get(app_name)
+                    # Fuzzy match: if exact alias not found, try close matches (typo tolerance)
+                    if not resolved:
+                        close_matches = difflib.get_close_matches(app_name, APP_ALIASES.keys(), n=1, cutoff=0.75)
+                        if close_matches:
+                            resolved = APP_ALIASES[close_matches[0]]
+                        else:
+                            resolved = app_name
                     return PCCommand(type="OPEN_APP", params={"app_name": resolved, "raw": app_name})
 
     # ── Open File ─────────────────────────────────────────────────
-    for kw in OPEN_FILE_KEYWORDS:
-        if kw in text_lower:
+    if cmd_type == "OPEN_FILE":
+        if True:
+            kw = matched_kw
             name = text_lower.replace(kw, "").strip()
             if name:
                 return PCCommand(type="OPEN_FILE", params={"name": name})
 
     # ── Shutdown / Restart / Sleep ────────────────────────────────
-    if _exact_phrase(text_lower, SHUTDOWN_KEYWORDS):
+    if cmd_type == "SHUTDOWN":
         return PCCommand(type="SHUTDOWN")
-    if _exact_phrase(text_lower, RESTART_KEYWORDS):
+    if cmd_type == "RESTART":
         return PCCommand(type="RESTART")
-    if _exact_phrase(text_lower, SLEEP_KEYWORDS):
+    if cmd_type == "SLEEP":
         return PCCommand(type="SLEEP")
 
     # ── Tab Control ───────────────────────────────────────────────
-    if _exact_phrase(text_lower, TAB_NEXT_KEYWORDS): return PCCommand(type="TAB_NEXT")
-    if _exact_phrase(text_lower, TAB_PREV_KEYWORDS): return PCCommand(type="TAB_PREV")
-    if _exact_phrase(text_lower, TAB_NEW_KEYWORDS):  return PCCommand(type="TAB_NEW")
-    if _exact_phrase(text_lower, TAB_CLOSE_KEYWORDS):return PCCommand(type="TAB_CLOSE")
+    if cmd_type == "TAB_NEXT": return PCCommand(type="TAB_NEXT")
+    if cmd_type == "TAB_PREV": return PCCommand(type="TAB_PREV")
+    if cmd_type == "TAB_NEW":  return PCCommand(type="TAB_NEW")
+    if cmd_type == "TAB_CLOSE":return PCCommand(type="TAB_CLOSE")
 
     # ── Advanced Browser Control ──────────────────────────────────
-    if _exact_phrase(text_lower, BROWSER_READ_PAGE_KEYWORDS): return PCCommand(type="BROWSER_READ_PAGE")
-    if _exact_phrase(text_lower, BROWSER_FULLSCREEN_KEYWORDS): return PCCommand(type="BROWSER_FULLSCREEN")
-    if _exact_phrase(text_lower, BROWSER_STATUS_KEYWORDS): return PCCommand(type="BROWSER_STATUS")
+    if cmd_type == "BROWSER_READ_PAGE": return PCCommand(type="BROWSER_READ_PAGE")
+    if cmd_type == "BROWSER_FULLSCREEN": return PCCommand(type="BROWSER_FULLSCREEN")
+    if cmd_type == "BROWSER_STATUS": return PCCommand(type="BROWSER_STATUS")
     
-    for kw in BROWSER_SCROLL_KEYWORDS:
-        if kw in text_lower:
+    if cmd_type == "BROWSER_SCROLL":
+        if True:
+            kw = matched_kw
             if "up" in text_lower: d = "up"
             elif "top" in text_lower: d = "top"
             elif "bottom" in text_lower: d = "bottom"
@@ -326,82 +442,68 @@ def parse_command(text: str) -> "PCCommand | None":
             return PCCommand(type="BROWSER_SCROLL", params={"direction": d})
 
     # ── Close App ─────────────────────────────────────────────────
-    for kw in CLOSE_KEYWORDS:
-        if text_lower.startswith(kw + " ") or text_lower == kw:
-            app_name = text_lower[len(kw):].strip()
+    if cmd_type == "CLOSE_APP":
+        if True:
+            kw = matched_kw
+            app_name = text_lower.split(kw, 1)[-1].strip()
+            # Guard: bare "close" with no app name should not close random foreground window
+            if not app_name:
+                return None
             if app_name != "tab":
                 return PCCommand(type="CLOSE_APP", params={"app_name": app_name})
 
     # ── Switch App ────────────────────────────────────────────────
-    for kw in SWITCH_APP_KEYWORDS:
-        if text_lower.startswith(kw + " "):
-            app_name = text_lower[len(kw):].strip()
+    if cmd_type == "SWITCH_APP":
+        if True:
+            kw = matched_kw
+            app_name = text_lower.split(kw, 1)[-1].strip()
             # Avoid collision: 'switch to professional/gf/dev' goes to personality; 'go to next/prev tab' goes to tab
             if app_name and app_name not in ["professional", "assistant", "gf", "developer"] \
                     and "tab" not in app_name:
                 return PCCommand(type="SWITCH_APP", params={"app_name": app_name})
 
     # ── Volume ────────────────────────────────────────────────────
-    if _exact_phrase(text_lower, VOLUME_UP_KEYWORDS):
-        return PCCommand(type="VOLUME_UP")
-    if _exact_phrase(text_lower, VOLUME_DOWN_KEYWORDS):
-        return PCCommand(type="VOLUME_DOWN")
-    if _exact_phrase(text_lower, MUTE_KEYWORDS):
-        return PCCommand(type="MUTE")
 
     # ── Brightness ────────────────────────────────────────────────
-    if _exact_phrase(text_lower, BRIGHTNESS_UP_KEYWORDS):
-        return PCCommand(type="BRIGHTNESS_UP")
-    if _exact_phrase(text_lower, BRIGHTNESS_DOWN_KEYWORDS):
-        return PCCommand(type="BRIGHTNESS_DOWN")
 
     # ── Screenshot ────────────────────────────────────────────────
-    if _exact_phrase(text_lower, SCREENSHOT_KEYWORDS):
-        return PCCommand(type="SCREENSHOT")
 
     # ── Screen Reader ─────────────────────────────────────────────
-    if _exact_phrase(text_lower, SCREEN_READ_KEYWORDS):
-        return PCCommand(type="READ_SCREEN")
 
     # ── Lock Screen ───────────────────────────────────────────────
-    if _exact_phrase(text_lower, LOCK_KEYWORDS):
-        return PCCommand(type="LOCK_SCREEN")
 
     # ── Media Controls ────────────────────────────────────────────
-    if _exact_phrase(text_lower, MEDIA_PLAY_PAUSE_KEYWORDS):
-        return PCCommand(type="MEDIA_PLAY_PAUSE")
-    if _exact_phrase(text_lower, MEDIA_NEXT_KEYWORDS):
-        return PCCommand(type="MEDIA_NEXT")
-    if _exact_phrase(text_lower, MEDIA_PREV_KEYWORDS):
-        return PCCommand(type="MEDIA_PREV")
 
     # ── Play on YouTube / Spotify ─────────────────────────────────
-    for kw in PLAY_KEYWORDS:
-        if text_lower.startswith(kw + " "):
-            query = text_lower[len(kw):].strip()
+    if cmd_type == "PLAY_YOUTUBE":
+        if True:
+            kw = matched_kw
+            query = text_lower.split(kw, 1)[-1].strip()
             if query:
                 if "spotify" in text_lower:
                     return PCCommand(type="PLAY_SPOTIFY", params={"query": query.replace("on spotify", "").strip()})
                 return PCCommand(type="PLAY_YOUTUBE", params={"query": query})
 
     # ── Google Search ─────────────────────────────────────────────
-    for kw in SEARCH_KEYWORDS:
-        if text_lower.startswith(kw + " "):
-            query = text_lower[len(kw):].strip()
+    if cmd_type == "SEARCH":
+        if True:
+            kw = matched_kw
+            query = text_lower.split(kw, 1)[-1].strip()
             if query:
                 return PCCommand(type="SEARCH", params={"query": query})
 
     # ── Type Text ─────────────────────────────────────────────────
-    for kw in TYPE_KEYWORDS:
-        if text_lower.startswith(kw + " "):
-            content = text.strip()[len(kw):].strip().strip(' "\'')
+    if cmd_type == "TYPE_TEXT":
+        if True:
+            kw = matched_kw
+            content = text.strip().split(kw, 1)[-1].strip().strip(' "\'')
             if content:
                 return PCCommand(type="TYPE_TEXT", params={"text": content})
 
     # ── Keyboard Press ────────────────────────────────────────────
     for kw in PRESS_KEYWORDS:
         if text_lower.startswith(kw + " "):
-            key = text_lower[len(kw):].strip()
+            key = text_lower.split(kw, 1)[-1].strip()
             return PCCommand(type="PRESS_KEY", params={"key": key})
 
     # ── Mouse Control ─────────────────────────────────────────────
@@ -429,45 +531,47 @@ def parse_command(text: str) -> "PCCommand | None":
             return PCCommand(type="MOUSE_MOVE_TO", params={"x": int(coords[0]), "y": int(coords[1])})
 
     # ── Window Snap ───────────────────────────────────────────────
-    if _exact_phrase(text_lower, SNAP_LEFT_KEYWORDS):
-        return PCCommand(type="SNAP_LEFT")
-    if _exact_phrase(text_lower, SNAP_RIGHT_KEYWORDS):
-        return PCCommand(type="SNAP_RIGHT")
 
     # ── File Operations ───────────────────────────────────────────
-    for kw in FILE_CREATE_KEYWORDS:
-        if kw in text_lower:
-            name = text_lower.replace(kw, "").strip()
+    if cmd_type == "CREATE_FILE":
+        if True:
+            kw = matched_kw
+            name = text_lower.split(kw, 1)[-1].strip()
             if name:
                 return PCCommand(type="CREATE_FILE", params={"name": name})
 
-    for kw in FILE_DELETE_KEYWORDS:
-        if kw in text_lower:
-            name = text_lower.replace(kw, "").strip()
+    if cmd_type == "DELETE_FILE":
+        if True:
+            kw = matched_kw
+            name = text_lower.split(kw, 1)[-1].strip()
             if name:
                 return PCCommand(type="DELETE_FILE", params={"name": name})
 
-    for kw in FOLDER_CREATE_KEYWORDS:
-        if kw in text_lower:
-            name = text_lower.replace(kw, "").strip()
+    if cmd_type == "CREATE_FOLDER":
+        if True:
+            kw = matched_kw
+            name = text_lower.split(kw, 1)[-1].strip()
             if name:
                 return PCCommand(type="CREATE_FOLDER", params={"name": name})
 
-    for kw in FOLDER_DELETE_KEYWORDS:
-        if kw in text_lower:
-            name = text_lower.replace(kw, "").strip()
+    if cmd_type == "DELETE_FOLDER":
+        if True:
+            kw = matched_kw
+            name = text_lower.split(kw, 1)[-1].strip()
             if name:
                 return PCCommand(type="DELETE_FOLDER", params={"name": name})
 
-    for kw in FIND_FILE_KEYWORDS:
-        if kw in text_lower:
-            name = text_lower.replace(kw, "").strip()
+    if cmd_type == "FIND_FILE":
+        if True:
+            kw = matched_kw
+            name = text_lower.split(kw, 1)[-1].strip()
             if name:
                 return PCCommand(type="FIND_FILE", params={"name": name})
 
-    for kw in LIST_FILES_KEYWORDS:
-        if text_lower.startswith(kw):
-            folder = text_lower.replace(kw, "").strip()
+    if cmd_type == "LIST_FILES":
+        if True:
+            kw = matched_kw
+            folder = text_lower.split(kw, 1)[-1].strip()
             return PCCommand(type="LIST_FILES", params={"folder": folder})
 
     for kw in LIST_WINDOWS_KEYWORDS:
@@ -480,7 +584,7 @@ def parse_command(text: str) -> "PCCommand | None":
 
     for kw in WRITE_CLIPBOARD_KEYWORDS:
         if text_lower.startswith(kw):
-            content = text.strip()[len(kw):].strip()
+            content = text.strip().split(kw, 1)[-1].strip()
             return PCCommand(type="WRITE_CLIPBOARD", params={"text": content})
 
     # ── News ──────────────────────────────────────────────────────
@@ -488,20 +592,20 @@ def parse_command(text: str) -> "PCCommand | None":
         return PCCommand(type="NEWS")
 
     # ── System Monitor / Weather ────────────────────────────────────────────
-    if _exact_phrase(text_lower, SYSTEM_STATUS_KEYWORDS):
-        return PCCommand(type="SYSTEM_STATUS")
 
-    for kw in WEATHER_KEYWORDS:
-        if kw in text_lower:
+    if cmd_type == "GET_WEATHER":
+        if True:
+            kw = matched_kw
             # Extract location
             loc = text_lower.split(kw, 1)[-1].strip()
             if not loc:
-                loc = "Delhi" # default if unspecified
+                loc = "" # Let wttr.in auto-detect via IP
             return PCCommand(type="GET_WEATHER", params={"location": loc})
 
     # ── Memory Vault ──────────────────────────────────────────────
-    for kw in REMEMBER_KEYWORDS:
-        if kw in text_lower:
+    if cmd_type == "REMEMBER":
+        if True:
+            kw = matched_kw
             fact = text_lower.replace(kw, "").strip()
             if fact:
                 return PCCommand(type="REMEMBER", params={"fact": fact})
@@ -572,7 +676,7 @@ def parse_command(text: str) -> "PCCommand | None":
     # ── Email ─────────────────────────────────────────────────────
     for kw in EMAIL_KEYWORDS:
         if text_lower.startswith(kw + " ") or text_lower == kw:
-            rest = text_lower[len(kw):].strip()
+            rest = text_lower.split(kw, 1)[-1].strip()
             if rest.startswith("to "): rest = rest[3:].strip()
             to = rest
             content = ""
@@ -589,9 +693,10 @@ def parse_command(text: str) -> "PCCommand | None":
             return PCCommand(type="SEND_EMAIL", params={"to": to, "content": content})
 
     # ── WhatsApp ──────────────────────────────────────────────────
-    for kw in WHATSAPP_KEYWORDS:
-        if text_lower.startswith(kw + " ") or text_lower == kw:
-            rest = text_lower[len(kw):].strip()
+    if cmd_type == "SEND_WHATSAPP":
+        if True:
+            kw = matched_kw
+            rest = text_lower.split(kw, 1)[-1].strip()
             if rest.startswith("to "):
                 rest = rest[3:].strip()
             
@@ -611,10 +716,18 @@ def parse_command(text: str) -> "PCCommand | None":
                 number = parts[0].strip()
                 content = parts[1].strip()
 
+            # Fallback: Only split on bare space if remainder looks like a phone number (all digits)
+            # This prevents multi-word names like "Rao Alok Yadav" from being split incorrectly
             if not content and " " in rest:
-                parts = rest.split(" ", 1)
-                number = parts[0].strip()
-                content = parts[1].strip()
+                first_word = rest.split(" ", 1)[0].strip()
+                # If first word is all digits, it's a phone number — split is safe
+                if first_word.replace("+", "").replace("-", "").isdigit():
+                    number = first_word
+                    content = rest.split(" ", 1)[1].strip()
+                else:
+                    # Multi-word contact name — keep entire rest as contact, no content
+                    number = rest
+                    content = ""
 
             # Strip trailing Hindi postposition 'ko' from contact name
             # e.g. "mom ko" → "mom", "rahul ko" → "rahul"
@@ -672,6 +785,19 @@ def parse_command(text: str) -> "PCCommand | None":
         if kw in text_lower:
             return PCCommand(type="DEV_GIT_STATUS")
 
+    for kw in DEV_GIT_COMMIT_KEYWORDS:
+        if text_lower.startswith(kw):
+            msg = text_lower.replace(kw, "").strip()
+            # Default commit message if none provided via voice
+            if not msg: msg = "Auto-commit by Sivi"
+            return PCCommand(type="DEV_GIT_COMMIT", params={"message": msg})
+
+    for kw in DEV_RUN_TESTS_KEYWORDS:
+        if text_lower.startswith(kw):
+            cmd = text_lower.replace(kw, "").strip()
+            if not cmd: cmd = "pytest" # Default to pytest if not specified
+            return PCCommand(type="DEV_RUN_TESTS", params={"cmd": cmd})
+
     for kw in DEV_KILL_PORT_KEYWORDS:
         if kw in text_lower:
             port = text_lower.replace(kw, "").strip()
@@ -708,6 +834,87 @@ def parse_command(text: str) -> "PCCommand | None":
     for kw in DEV_CLOSE_EDITOR_KEYWORDS:
         if kw in text_lower:
             return PCCommand(type="DEV_CLOSE_EDITOR")
+
+    for kw in DEV_MONITOR_LOGS_KEYWORDS:
+        if kw in text_lower:
+            filename = text_lower.replace(kw, "").strip()
+            return PCCommand(type="DEV_MONITOR_LOGS", params={"filename": filename})
+
+    for kw in DEV_DB_QUERY_KEYWORDS:
+        if kw in text_lower:
+            # Expected syntax: "query database sqlite:///data.db SELECT * FROM users"
+            rest = text_lower.replace(kw, "").strip()
+            parts = rest.split(" ", 1)
+            conn_str = parts[0].strip()
+            query = parts[1].strip() if len(parts) > 1 else ""
+            return PCCommand(type="DEV_DB_QUERY", params={"connection_string": conn_str, "query": query})
+
+    for kw in GRAPH_ADD_KEYWORDS:
+        if kw in text_lower:
+            rest = text_lower.replace(kw, "").strip()
+            # Expected syntax: "graph add Alok | likes | Python"
+            parts = [p.strip() for p in rest.split("|")]
+            if len(parts) == 3:
+                return PCCommand(type="GRAPH_ADD", params={"subject": parts[0], "predicate": parts[1], "object": parts[2]})
+            
+    for kw in GRAPH_QUERY_KEYWORDS:
+        if kw in text_lower:
+            entity = text_lower.replace(kw, "").strip()
+            return PCCommand(type="GRAPH_QUERY", params={"entity": entity})
+
+    for kw in SWARM_KEYWORDS:
+        if kw in text_lower:
+            query = text_lower.replace(kw, "").strip()
+            return PCCommand(type="SWARM_RUN", params={"query": query})
+
+    for kw in MOBILE_HANDOFF_KEYWORDS:
+        if text_lower.startswith(kw):
+            msg = text_lower.replace(kw, "").strip()
+            return PCCommand(type="MOBILE_HANDOFF", params={"message": msg})
+
+    # NOTE: Timer keywords already handled at line 280 (SET_TIMER). This block is for SCHEDULE_TASK only.
+    if cmd_type == "SCHEDULE_TASK":
+        if True:
+            kw = matched_kw
+            rest = text_lower.split(kw, 1)[-1].strip()
+            parts = rest.split(" in ")
+            instruction = parts[0].strip()
+            time_str = parts[1].strip() if len(parts) > 1 else "60 seconds"
+            seconds = 60
+            if "minute" in time_str:
+                num = re.search(r'\d+', time_str)
+                if num: seconds = int(num.group()) * 60
+            elif "second" in time_str:
+                num = re.search(r'\d+', time_str)
+                if num: seconds = int(num.group())
+            return PCCommand(type="SCHEDULE_TASK", params={"instruction": instruction, "command": instruction, "delay": seconds})
+
+    for kw in LIST_SCHEDULED_KEYWORDS:
+        if kw in text_lower:
+            return PCCommand(type="LIST_SCHEDULED_TASKS")
+
+    # ── UIA Integration (DOM Accessibility) ───────────────────────
+    for kw in UIA_CLICK_KEYWORDS:
+        if text_lower.startswith(kw):
+            rest = text_lower.replace(kw, "").strip()
+            parts = rest.split(" in ")
+            element = parts[0].strip()
+            app = parts[1].strip() if len(parts) > 1 else ""
+            return PCCommand(type="UIA_CLICK", params={"app_name": app, "element_name": element})
+            
+    for kw in UIA_TYPE_KEYWORDS:
+        if text_lower.startswith(kw):
+            rest = text_lower.replace(kw, "").strip()
+            parts = rest.split(" in ")
+            text = parts[0].strip()
+            element = parts[1].strip() if len(parts) > 1 else ""
+            app = parts[2].strip() if len(parts) > 2 else ""
+            return PCCommand(type="UIA_TYPE", params={"app_name": app, "element_name": element, "text": text})
+            
+    for kw in UIA_READ_KEYWORDS:
+        if text_lower.startswith(kw):
+            app = text_lower.replace(kw, "").strip()
+            return PCCommand(type="UIA_READ", params={"app_name": app})
 
     # ── MCP (Model Context Protocol) ──────────────────────────────
     if text_lower.startswith("mcp "):

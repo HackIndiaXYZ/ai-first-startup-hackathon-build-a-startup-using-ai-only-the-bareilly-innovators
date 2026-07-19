@@ -35,20 +35,16 @@ class SensoryOrchestrator:
         
     async def _sensory_loop(self):
         while self._running:
-            now = time.time()
-            if now - self._last_check >= self.CHECK_INTERVAL:
-                self._last_check = now
-                try:
-                    from core.camera_vision import camera_vision
-                    wellness = await asyncio.to_thread(camera_vision.analyze_wellness)
-                    if wellness and ("fatigue" in wellness.lower() or "tired" in wellness.lower() or "stress" in wellness.lower()):
-                        # Trigger an empathetic intervention
-                        if self._bridge_callback:
-                            msg = f"[SENSORY ALERT: You noticed Boss looks exhausted/stressed based on the webcam ('{wellness}'). Gently interrupt and ask if they are okay or suggest taking a break.]"
-                            # We can't await this directly if it's not async, but bridge_callback is gemini_client.send_text which is async
-                            await self._bridge_callback(msg)
-                except Exception as e:
-                    logger.debug(f"[SensoryOrchestrator] check failed: {e}")
-            await asyncio.sleep(60)
+            try:
+                from core.camera_vision import camera_vision
+                wellness = await asyncio.to_thread(camera_vision.analyze_wellness)
+                if wellness and ("fatigue" in wellness.lower() or "tired" in wellness.lower() or "stress" in wellness.lower()):
+                    if self._bridge_callback:
+                        msg = f"[SENSORY ALERT: You noticed Boss looks exhausted/stressed based on the webcam ('{wellness}'). Gently interrupt and ask if they are okay or suggest taking a break.]"
+                        await self._bridge_callback(msg)
+            except Exception as e:
+                logger.debug(f"[SensoryOrchestrator] check failed: {e}")
+            # Sleep for the full interval — no need to wake up every 60s just to check a timer
+            await asyncio.sleep(self.CHECK_INTERVAL)
 
 sensory_orchestrator = SensoryOrchestrator()

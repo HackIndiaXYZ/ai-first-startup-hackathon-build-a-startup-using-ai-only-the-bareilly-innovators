@@ -15,34 +15,66 @@ class SystemController:
     # ── Volume ────────────────────────────────────────────────────
 
     def volume_up(self, amount: int = 10):
-        presses = max(1, amount // 2)
-        pyautogui.press('volumeup', presses=presses)
-        return "Volume increased."
+        try:
+            import win32api
+            import win32con
+            VK_VOLUME_UP = 0xAF
+            presses = max(1, amount // 2)
+            for _ in range(presses):
+                win32api.keybd_event(VK_VOLUME_UP, 0, 0, 0)
+                win32api.keybd_event(VK_VOLUME_UP, 0, win32con.KEYEVENTF_KEYUP, 0)
+            return "Volume increased."
+        except Exception:
+            presses = max(1, amount // 2)
+            pyautogui.press('volumeup', presses=presses)
+            return "Volume increased."
 
     def volume_down(self, amount: int = 10):
-        presses = max(1, amount // 2)
-        pyautogui.press('volumedown', presses=presses)
-        return "Volume decreased."
+        try:
+            import win32api
+            import win32con
+            VK_VOLUME_DOWN = 0xAE
+            presses = max(1, amount // 2)
+            for _ in range(presses):
+                win32api.keybd_event(VK_VOLUME_DOWN, 0, 0, 0)
+                win32api.keybd_event(VK_VOLUME_DOWN, 0, win32con.KEYEVENTF_KEYUP, 0)
+            return "Volume decreased."
+        except Exception:
+            presses = max(1, amount // 2)
+            pyautogui.press('volumedown', presses=presses)
+            return "Volume decreased."
 
     def mute_volume(self):
-        pyautogui.press('volumemute')
-        return "Volume muted/unmuted."
+        try:
+            import win32api
+            import win32con
+            VK_VOLUME_MUTE = 0xAD
+            win32api.keybd_event(VK_VOLUME_MUTE, 0, 0, 0)
+            win32api.keybd_event(VK_VOLUME_MUTE, 0, win32con.KEYEVENTF_KEYUP, 0)
+            return "Volume muted/unmuted."
+        except Exception:
+            pyautogui.press('volumemute')
+            return "Volume muted/unmuted."
 
     def set_volume(self, level: int) -> str:
-        """Set volume to exact percentage using PowerShell."""
+        """Set volume to exact percentage using win32api."""
         level = max(0, min(100, level))
         try:
-            # Use PowerShell with the WScript.Shell audio COM interface
-            ps_cmd = (
-                "$wsh = New-Object -ComObject WScript.Shell; "
-                # Mute then unmute (resets volume internally)
-                "for($i=0;$i -lt 50;$i++){$wsh.SendKeys([char]174)}; "  # VolumeDown x50 → mute
-                f"for($i=0;$i -lt {level // 2};$i++){{$wsh.SendKeys([char]175)}}"  # VolumeUp to target
-            )
-            subprocess.run(
-                ["powershell", "-Command", ps_cmd],
-                capture_output=True, timeout=8
-            )
+            import win32api
+            import win32con
+            VK_VOLUME_DOWN = 0xAE
+            VK_VOLUME_UP = 0xAF
+            
+            # Mute completely first
+            for _ in range(50):
+                win32api.keybd_event(VK_VOLUME_DOWN, 0, 0, 0)
+                win32api.keybd_event(VK_VOLUME_DOWN, 0, win32con.KEYEVENTF_KEYUP, 0)
+                
+            # Increase to target level
+            for _ in range(level // 2):
+                win32api.keybd_event(VK_VOLUME_UP, 0, 0, 0)
+                win32api.keybd_event(VK_VOLUME_UP, 0, win32con.KEYEVENTF_KEYUP, 0)
+                
             return f"Volume set to approximately {level}%."
         except Exception as e:
             return f"Could not set volume: {e}"
@@ -141,9 +173,11 @@ class SystemController:
             return f"Copied to clipboard: {text[:50]}{'...' if len(text) > 50 else ''}"
         except ImportError:
             try:
+                # Safe: pipe text via stdin instead of string interpolation
+                # This prevents PowerShell injection attacks
                 result = subprocess.run(
-                    ["powershell", "-Command", f"Set-Clipboard -Value '{text}'"],
-                    capture_output=True, timeout=3
+                    ["powershell", "-Command", "Set-Clipboard -Value $input"],
+                    input=text, capture_output=True, timeout=3, text=True
                 )
                 return "Text copied to clipboard."
             except Exception as e:
@@ -193,10 +227,7 @@ class SystemController:
             )
             return "Bluetooth enabled."
         except Exception as e:
-            if sys.platform == "darwin":
-                subprocess.run(["open", "x-apple.systempreferences:com.apple.preferences.Bluetooth"])
-            else:
-                os.startfile("ms-settings:bluetooth")
+            os.startfile("ms-settings:bluetooth")
             return "Opened Bluetooth settings."
 
     def bluetooth_off(self) -> str:
@@ -212,10 +243,7 @@ class SystemController:
             )
             return "Bluetooth disabled."
         except Exception as e:
-            if sys.platform == "darwin":
-                subprocess.run(["open", "x-apple.systempreferences:com.apple.preferences.Bluetooth"])
-            else:
-                os.startfile("ms-settings:bluetooth")
+            os.startfile("ms-settings:bluetooth")
             return "Opened Bluetooth settings."
 
     # ── Media ─────────────────────────────────────────────────────

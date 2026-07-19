@@ -29,7 +29,9 @@ class SystemMonitor:
             ram_percent = ram.percent
             ram_free_gb = round(ram.available / (1024 ** 3), 1)
             
-            disk = psutil.disk_usage('C:\\')
+            import os
+            root_drive = os.path.abspath(os.sep)
+            disk = psutil.disk_usage(root_drive)
             disk_free_gb = round(disk.free / (1024 ** 3), 1)
 
             battery = psutil.sensors_battery()

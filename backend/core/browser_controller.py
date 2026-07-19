@@ -70,7 +70,7 @@ class BrowserController:
             self.browser_context = None
             if self.playwright:
                 try: await self.playwright.stop()
-                except: pass
+                except Exception: pass
                 self.playwright = None
             await self._ensure_started()
             return await self.browser_context.new_page()
@@ -87,7 +87,7 @@ class BrowserController:
             self.browser_context = None
             if self.playwright:
                 try: await self.playwright.stop()
-                except: pass
+                except Exception: pass
                 self.playwright = None
             await self._ensure_started()
             return self.current_page
@@ -268,7 +268,7 @@ class BrowserController:
             try:
                 title = await page.title()
                 tab_titles.append(f"[{i+1}] {title}")
-            except:
+            except Exception:
                 pass
         return "Open browser tabs:\n" + "\n".join(tab_titles)
 

@@ -89,15 +89,16 @@ class GeminiKeyPool:
             idx += 1
 
         if not self._entries:
-            raise RuntimeError(
+            logger.warning(
                 "[KeyPool] No Gemini API key found. "
-                "Set GEMINI_API_KEY in backend/.env"
+                "Set GEMINI_API_KEY in backend/.env. "
+                "Voice and AI features will be unavailable until a key is configured."
             )
-
-        logger.info(
-            f"[KeyPool] Loaded {len(self._entries)} key(s): "
-            + ", ".join(e.suffix for e in self._entries)
-        )
+        else:
+            logger.info(
+                f"[KeyPool] Loaded {len(self._entries)} key(s): "
+                + ", ".join(e.suffix for e in self._entries)
+            )
 
     # ── Public API ────────────────────────────────────────────────
 
@@ -108,6 +109,12 @@ class GeminiKeyPool:
         and logs a warning — the caller will receive a 429 and should retry.
         """
         with self._lock:
+            if not self._entries:
+                raise RuntimeError(
+                    "[KeyPool] No API keys configured. "
+                    "Set GEMINI_API_KEY in backend/.env and restart."
+                )
+
             available = [e for e in self._entries if e.is_available]
 
             if not available:
@@ -134,13 +141,14 @@ class GeminiKeyPool:
         Always return the PRIMARY key (index 0) for Gemini Live streaming.
         Live API requires a stable, project-enabled key. Secondary keys may
         belong to projects that have not enabled the Live API endpoint.
-        Falls back to get() if primary is disabled.
+        Falls back to get() if primary is cooling or disabled.
         """
         with self._lock:
             if self._entries and self._entries[0].is_available:
                 self._entries[0].use_count += 1
                 return self._entries[0].key
-        # Primary unavailable — fall back to best available
+            # Primary unavailable — note: we release the lock before calling get()
+            # This is intentional and safe: get() acquires its own lock independently.
         return self.get()
 
     def report_quota(self, key: str) -> None:

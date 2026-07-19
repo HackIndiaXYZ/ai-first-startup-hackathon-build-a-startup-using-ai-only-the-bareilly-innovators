@@ -4,37 +4,32 @@ Extracts implicit facts from chat history buffer.
 """
 
 import logging
-import asyncio
+import threading
 
 logger = logging.getLogger("sivi.subconscious")
 
 class SubconsciousMemory:
     def __init__(self):
         self._buffer = []
+        self._lock = threading.Lock()
         
     def log_message(self, role: str, text: str):
-        self._buffer.append(f"{role}: {text}")
-        if len(self._buffer) > 20:
-            # Process in background
-            asyncio.create_task(self._extract_facts(list(self._buffer)))
-            self._buffer.clear()
+        with self._lock:
+            self._buffer.append(f"{role}: {text}")
+            # Keep buffer bounded — old messages are dropped once we exceed 50
+            if len(self._buffer) > 50:
+                self._buffer = self._buffer[-50:]
             
-    async def _extract_facts(self, transcript: list):
+    def _extract_facts(self, transcript: list):
+        """Extract implicit facts from conversation. Runs in background thread."""
         try:
-            from core.text_llm import text_llm
             from core.memory_vault import memory_vault
             
             chat_log = "\n".join(transcript)
-            prompt = f"Analyze this conversation. Extract ONLY persistent factual preferences or habits about the user (e.g., likes dark mode, hates spicy food, works late). Return as a list of bullet points. If nothing significant, return 'NONE'.\n{chat_log}"
-            
             # [API QUOTA SAVER] Disabled background LLM memory extraction
-            # result = await text_llm.complete(prompt=prompt, system="You are the Subconscious. Extract implicit facts.")
-            # if "NONE" not in result and result.strip():
-            #     for line in result.split("\n"):
-            #         fact = line.strip("-* ")
-            #         if fact:
-            #             memory_vault.remember(fact)
-            #             logger.info(f"[Subconscious] Extracted implicit fact: {fact}")
+            # to avoid burning API quota on implicit fact mining.
+            # When re-enabled, use text_llm.complete() synchronously via asyncio.run().
+            logger.debug(f"[Subconscious] Buffered {len(transcript)} messages (extraction disabled)")
             return
         except Exception as e:
             logger.debug(f"[Subconscious] error: {e}")

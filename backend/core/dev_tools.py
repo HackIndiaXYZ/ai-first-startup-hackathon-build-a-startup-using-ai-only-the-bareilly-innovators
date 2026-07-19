@@ -21,8 +21,7 @@ class DeveloperTools:
     def __init__(self):
         self.model_name = 'gemini-2.0-flash'
 
-    def _get_client(self):
-        pass
+
 
     def run_command(self, cmd: str) -> str:
         """Execute a raw terminal command and return output."""
@@ -94,8 +93,7 @@ class DeveloperTools:
 
     def analyze_code(self, filename: str) -> str:
         """Deep read of a file to find bugs using Gemini."""
-        client = self._get_client()
-        if not client:
+        if not _genai_available:
             return "Generative AI is not configured. Cannot analyze code."
             
         # Try to find file in current dir or desktop or workspace
@@ -137,8 +135,7 @@ class DeveloperTools:
 
     def generate_code(self, filename: str, instructions: str) -> str:
         """Generate code and save it to the specified file."""
-        client = self._get_client()
-        if not client:
+        if not _genai_available:
             return "Generative AI is not configured. Cannot generate code."
             
         try:
@@ -176,8 +173,7 @@ class DeveloperTools:
 
     def execute_python_script(self, goal: str) -> str:
         """Autonomously generate and execute a Python script to achieve a goal."""
-        client = self._get_client()
-        if not client:
+        if not _genai_available:
             return "Generative AI is not configured. Cannot write script."
             
         try:
@@ -205,9 +201,28 @@ class DeveloperTools:
                     lines = lines[:-1]
                 raw_code = "\n".join(lines).strip()
 
-            script_path = os.path.join(os.path.dirname(__file__), "__sivi_auto_module.py")
+            import sys
+            if getattr(sys, 'frozen', False):
+                BASE_DIR = os.path.dirname(sys.executable)
+            else:
+                BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            script_path = os.path.join(BASE_DIR, "__sivi_auto_module.py")
+            
+            # Safety: Check for obviously dangerous patterns before executing
+            dangerous_patterns = [
+                'os.system("rm ', 'os.system("del ', 'os.system("format',
+                'shutil.rmtree', 'subprocess.run(["format', 'os.remove("C:',
+                'os.system("shutdown', 'os.system("rd /s',
+            ]
+            code_lower = raw_code.lower()
+            for pattern in dangerous_patterns:
+                if pattern.lower() in code_lower:
+                    return f"Safety block: Generated code contains dangerous pattern '{pattern}'. Refusing to execute."
+            
             with open(script_path, 'w', encoding='utf-8') as f:
                 f.write(raw_code)
+            
+            logger.info(f"[DevTools] Executing auto-generated script ({len(raw_code)} chars)")
                 
             # Execute the script
             process = subprocess.Popen(
@@ -237,8 +252,7 @@ class DeveloperTools:
 
     def spawn_subagent(self, goal: str) -> str:
         """Spawn a detached background Python worker to monitor something continuously."""
-        client = self._get_client()
-        if not client:
+        if not _genai_available:
             return "Generative AI is not configured. Cannot spawn subagent."
             
         try:

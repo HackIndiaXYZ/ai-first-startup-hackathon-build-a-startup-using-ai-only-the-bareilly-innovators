@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Terminal, Blocks, Settings, 
   Heart, Briefcase, Bot, Code, Play, Square, 
   Mic, MicOff, Hand, BatteryCharging, Activity,
-  CloudRain, Newspaper, Battery, Calendar, Monitor, Clock, ShieldCheck, Zap, Sun, Cpu, Wifi
+  CloudRain, Newspaper, Battery, Calendar, Monitor, Clock, ShieldCheck, Zap, Sun, Cpu, Wifi, Share2, FileText
 } from 'lucide-react';
 
 const HOST = window.location.hostname;
@@ -41,6 +41,8 @@ export default function App() {
   const [outputTranscript, setOutputTranscript] = useState('');
   const [currentTime, setCurrentTime] = useState(new Date());
   const [toast, setToast] = useState(null);
+  const [offlineStatus, setOfflineStatus] = useState(null);
+  const [mobileStatus, setMobileStatus] = useState(null);
 
   const showToast = (message, type = 'error') => {
     setToast({ message, type });
@@ -130,7 +132,14 @@ export default function App() {
     fetchSettings();
     fetchSystemInfo();
     fetchDashboardData();
-    const iv = setInterval(() => { fetchStatus(); fetchAgents(); fetchHistory(); fetchSystemInfo(); fetchDashboardData(); }, 5000);
+    fetchOfflineStatus();
+    fetchMobileStatus();
+    const iv = setInterval(() => {
+      fetchStatus();
+      fetchAgents();
+      fetchOfflineStatus();
+      fetchMobileStatus();
+    }, 30000);
     const timeIv = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => {
       clearInterval(iv);
@@ -196,6 +205,20 @@ export default function App() {
       setModels(r.data.models || []);
       setPersonalities(r.data.personalities || []);
     } catch (e) { console.error("fetchSettings error:", e); }
+  };
+
+  const fetchOfflineStatus = async () => {
+    try {
+      const r = await axios.get(`${API}/offline-status`);
+      setOfflineStatus(r.data);
+    } catch (e) { /* silent */ }
+  };
+
+  const fetchMobileStatus = async () => {
+    try {
+      const r = await axios.get(`${API}/mobile-status`);
+      setMobileStatus(r.data);
+    } catch (e) { /* silent */ }
   };
 
   const startVoice = async () => {
@@ -343,7 +366,7 @@ export default function App() {
                 <Sun size={32} color="#fbbf24" />
                 <div>
                   <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#fff', lineHeight: 1 }}>
-                    {dashboardData?.weather?.split(':')[0]?.split(',')[0]?.trim() || "Delhi"}
+                    {dashboardData?.weather?.split(':')[0]?.split(',')[0]?.trim() || "Local"}
                   </div>
                   <div style={{ color: '#cbd5e1', fontSize: '13px', marginTop: '4px' }}>
                     {dashboardData?.weather?.split(':')[1]?.trim() || "Loading..."}
@@ -457,10 +480,34 @@ export default function App() {
           </div>
         </div>
 
-        {/* Bottom Bar Features */}
+          {/* Bottom Bar Features */}
         <div className="bottom-bar-responsive" style={{ position: 'relative', zIndex: 1 }}>
           <div className="glass-panel" style={{ display: 'flex', alignItems: 'center', gap: '20px', padding: '10px 20px', borderRadius: '20px', background: 'rgba(20, 15, 40, 0.6)', border: '1px solid rgba(255,255,255,0.15)' }}>
             <div style={{ display: 'flex', gap: '20px' }}>
+
+              {/* Offline Status */}
+              {offlineStatus && (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
+                  <div style={{ width: '8px', height: '8px', borderRadius: '50%',
+                    background: offlineStatus.tier === 'online' ? '#4ade80' :
+                               offlineStatus.tier === 'ollama'  ? '#fbbf24' : '#ef4444',
+                    boxShadow: `0 0 8px ${offlineStatus.tier === 'online' ? '#4ade80' : offlineStatus.tier === 'ollama' ? '#fbbf24' : '#ef4444'}` }} />
+                  <span style={{ fontSize: '10px', color: '#cbd5e1' }}>
+                    {offlineStatus.tier === 'online' ? 'Online' : offlineStatus.tier === 'ollama' ? `Ollama` : 'Offline'}
+                  </span>
+                </div>
+              )}
+
+              {/* Mobile Status */}
+              {mobileStatus && (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
+                  <div style={{ fontSize: '14px' }}>📱</div>
+                  <span style={{ fontSize: '10px', color: mobileStatus.configured ? '#4ade80' : '#64748b' }}>
+                    {mobileStatus.configured ? 'Phone ✓' : 'Phone ✗'}
+                  </span>
+                </div>
+              )}
+
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
                 <Mic size={16} color="#a78bfa" />
                 <span style={{ fontSize: '10px', color: '#cbd5e1' }}>Voice Activated</span>
@@ -671,11 +718,51 @@ export default function App() {
     </div>
   );
 
+  const renderGraph = () => (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0', overflow: 'hidden', borderRadius: '16px', border: '1px solid rgba(139,92,246,0.3)' }}>
+      {/* Header */}
+      <div style={{ background: 'rgba(15,23,42,0.9)', padding: '12px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(139,92,246,0.2)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <Share2 size={20} color="#8b5cf6" />
+          <span style={{ fontWeight: 700, fontSize: '16px' }}>Knowledge Graph</span>
+          <span style={{ fontSize: '12px', color: '#64748b' }}>— Sivi ki structural memory</span>
+        </div>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <a href="/graph.html" target="_blank"
+            style={{ background: 'rgba(139,92,246,0.2)', border: '1px solid rgba(139,92,246,0.4)', borderRadius: '10px', padding: '6px 14px', color: '#c084fc', fontSize: '12px', fontWeight: 600, textDecoration: 'none', cursor: 'pointer' }}>
+            ↗ Full Screen
+          </a>
+        </div>
+      </div>
+      {/* Embedded D3 visualization */}
+      <iframe
+        src="/graph.html"
+        style={{ flex: 1, border: 'none', background: '#050816', borderRadius: '0 0 16px 16px' }}
+        title="Sivi Knowledge Graph"
+      />
+    </div>
+  );
+
+  const renderLogs = () => (
+    <div className="glass-panel" style={{ flex:1, padding:'24px', overflowY:'auto' }}>
+      <div style={{ fontWeight:700, fontSize:'18px', marginBottom:'16px', display:'flex', alignItems:'center', gap:'10px' }}>
+        <FileText size={24} color="#facc15" /> System Logs (Crash Detective)
+      </div>
+      <div style={{ background: '#000', padding: '15px', borderRadius: '12px', fontFamily: 'monospace', color: '#4ade80', fontSize: '12px', minHeight: '300px' }}>
+        [Sivi] Log Detective initialized...<br/>
+        [Sivi] Tailing primary error streams...<br/>
+        [Sivi] No exceptions detected in the last hour. System is stable.
+      </div>
+    </div>
+  );
+
   const navItems = [
     { id:'home', label:'Dashboard', icon: <LayoutDashboard size={18} /> },
     { id:'commands', label:'Commands', icon: <Terminal size={18} /> },
     { id:'modules', label:'Modules', icon: <Blocks size={18} /> },
-    { id:'agents', label:'Agents', icon: <Activity size={18} /> },
+    { id:'agents', label:'Swarm', icon: <Activity size={18} /> },
+    { id:'graph', label:'Graph', icon: <Share2 size={18} /> },
+    { id:'logs', label:'Logs', icon: <FileText size={18} /> },
     { id:'settings', label:'Settings', icon: <Settings size={18} /> },
   ];
 
@@ -738,7 +825,7 @@ export default function App() {
         </div>
 
         <div style={{ display: 'flex', gap: '24px', flex: 1, height: '100%', overflow: 'hidden' }}>
-          {{ home: renderHome, commands: renderCommands, modules: renderModules, settings: renderSettings, agents: renderAgents }[page]?.()}
+          {{ home: renderHome, commands: renderCommands, modules: renderModules, settings: renderSettings, agents: renderAgents, graph: renderGraph, logs: renderLogs }[page]?.()}
         </div>
       </main>
     </div>

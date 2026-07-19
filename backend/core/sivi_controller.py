@@ -28,6 +28,19 @@ from system_monitor import system_monitor
 from memory_vault import memory_vault
 from dev_tools import dev_tools
 from web_scraper import web_scraper
+from log_detective import log_detective
+from task_queue import task_queue
+from database_whisperer import database_whisperer
+from knowledge_graph import knowledge_graph
+from git_orchestrator import git_orchestrator
+from swarm_manager import swarm_manager
+from mobile_handoff import mobile_handoff
+try:
+    from uia_controller import uia_controller
+    _uia_available = True
+except Exception as e:
+    _uia_available = False
+    print(f" uia_controller unavailable: {e}")
 
 try:
     from camera_vision import camera_vision
@@ -43,17 +56,6 @@ except Exception as e:
     _browser_available = False
     print(f" browser_controller unavailable: {e}")
 
-try:
-    from medical import medical_assistant
-    _medical_available = True
-except Exception as e:
-    _medical_available = False
-
-try:
-    from sivi_email import email_manager
-    _email_available = True
-except Exception as e:
-    _email_available = False
 
 try:
     from gnews import news_fetcher
@@ -62,7 +64,7 @@ except Exception as e:
     _news_available = False
 
 try:
-    from whatsapp_desktop_controller import whatsapp_desktop_controller
+    from whatsapp_web_controller import whatsapp_web_controller
     _whatsapp_available = True
 except Exception as e:
     _whatsapp_available = False
@@ -79,11 +81,6 @@ try:
 except Exception as e:
     _local_llm_available = False
 
-try:
-    from plugin_manager import plugin_manager
-    _plugins_available = True
-except Exception as e:
-    _plugins_available = False
 
 try:
     from calendar_manager import calendar_manager
@@ -104,16 +101,13 @@ class SiviController:
             {"name": "Window Manager",      "file": "window_manager.py",     "status": "active"},
             {"name": "Keyboard Controller", "file": "keyboard_controller.py","status": "active"},
             {"name": "Camera Vision",       "file": "camera_vision.py",      "status": "active" if _camera_available else "no-key"},
-            {"name": "Medical AI",          "file": "medical.py",            "status": "active" if _medical_available else "no-key"},
-            {"name": "Email",               "file": "sivi_email.py",       "status": "active" if _email_available else "no-key"},
             {"name": "News",                "file": "gnews.py",              "status": "active" if _news_available else "no-key"},
-            {"name": "WhatsApp Desktop",    "file": "whatsapp_desktop_controller.py",  "status": "active" if _whatsapp_available else "not-configured"},
+            {"name": "WhatsApp Web",    "file": "whatsapp_web_controller.py",  "status": "active" if _whatsapp_available else "not-configured"},
             {"name": "Screen Reader",       "file": "screen_reader.py",      "status": "active"},
             {"name": "File Manager",        "file": "file_manager.py",       "status": "active"},
             {"name": "Hindi Voice",         "file": "hindi_voice.py",        "status": "active"},
             {"name": "Spotify",             "file": "spotify_controller.py", "status": "active" if _spotify_available else "not-configured"},
             {"name": "Local LLM",           "file": "local_llm.py",          "status": "active" if _local_llm_available else "not-configured"},
-            {"name": "Plugin System",       "file": "plugin_manager.py",     "status": "active" if _plugins_available else "not-configured"},
             {"name": "Calendar",            "file": "calendar_manager.py",   "status": "active" if _calendar_available else "not-configured"},
             {"name": "System Monitor",      "file": "system_monitor.py",     "status": "active"},
             {"name": "Memory Vault",        "file": "memory_vault.py",       "status": "active"},
@@ -130,11 +124,6 @@ class SiviController:
         if translated != text_lower:
             print(f"    Hindi detected, translated: '{translated}'")
             text_lower = translated
-
-        if _plugins_available:
-            plugin_result = plugin_manager.try_handle(text_lower)
-            if plugin_result:
-                return plugin_result
 
         cmd = parse_command(text_lower)
         if not cmd:
@@ -172,7 +161,16 @@ class SiviController:
             if t == "TYPE_TEXT": return keyboard_controller.type_text(p.get("text"))
             if t == "PRESS_KEY": return keyboard_controller.press_key(p.get("key"))
 
+            # ── UIA / Native Accessibility ────────────────────────
+            if t == "UIA_CLICK":
+                return uia_controller.click_element(p.get("app_name"), p.get("element_name")) if _uia_available else "UIA module unavailable."
+            if t == "UIA_TYPE":
+                return uia_controller.type_into_element(p.get("app_name"), p.get("element_name"), p.get("text")) if _uia_available else "UIA module unavailable."
+            if t == "UIA_READ":
+                return uia_controller.read_window_content(p.get("app_name")) if _uia_available else "UIA module unavailable."
+
             # ── Mouse ─────────────────────────────────────────────
+
             if t == "MOUSE_CLICK":
                 return mouse_controller.click(button=p.get("button", "left"), double=p.get("double", False))
             if t == "MOUSE_SCROLL":
@@ -241,28 +239,21 @@ class SiviController:
                 if not p.get("title"): return "What event would you like to schedule?"
                 return calendar_manager.quick_add_event(p.get("title")) if _calendar_available else "Calendar offline."
 
-            # ── Medical ───────────────────────────────────────────
-            if t == "MEDICAL_ADVICE":
-                return medical_assistant.get_advice(p.get("query")) if _medical_available else "Medical AI offline."
-
-            # ── Email / WhatsApp ──────────────────────────────────
-            if t == "SEND_EMAIL":
-                if not p.get("to"): return "Format: 'send email to NAME saying MESSAGE'"
-                return email_manager.send_email(f"{p.get('to')}@gmail.com", "Message from Sivi", p.get("content")) if _email_available else "Email offline."
+            # ── WhatsApp ──────────────────────────────────
             if t == "SEND_WHATSAPP":
                 if not p.get("number"): return "Format: 'send message to NUMBER saying TEXT'"
-                return whatsapp_desktop_controller.send_whatsapp_message(p.get("number"), p.get("content")) if _whatsapp_available else "WhatsApp offline."
+                return whatsapp_web_controller.send_whatsapp_message(p.get("number"), p.get("content")) if _whatsapp_available else "WhatsApp offline."
             if t == "WHATSAPP_READ_CHAT":
-                return whatsapp_desktop_controller.read_chat(contact=p.get("contact", "")) if _whatsapp_available else "WhatsApp offline."
+                return whatsapp_web_controller.read_chat(contact=p.get("contact", "")) if _whatsapp_available else "WhatsApp offline."
             if t == "WHATSAPP_CALL":
                 if not p.get("number"): return "Please specify the contact number to call."
-                return whatsapp_desktop_controller.voice_video_call(p.get("number"), p.get("call_type")) if _whatsapp_available else "WhatsApp offline."
+                return whatsapp_web_controller.voice_video_call(p.get("number"), p.get("call_type")) if hasattr(whatsapp_web_controller, 'voice_video_call') else "Not supported in Web."
             if t == "WHATSAPP_SEND_MEDIA":
                 if not p.get("number") or not p.get("filepath"): return "Please specify number and file path."
-                return whatsapp_desktop_controller.send_media(p.get("number"), p.get("filepath")) if _whatsapp_available else "WhatsApp offline."
+                return whatsapp_web_controller.send_media(p.get("number"), p.get("filepath")) if hasattr(whatsapp_web_controller, 'send_media') else "Not supported in Web."
             if t == "WHATSAPP_VOICE_NOTE":
                 if not p.get("number"): return "Please specify the contact to send the voice note to."
-                return whatsapp_desktop_controller.record_voice_note(p.get("number")) if _whatsapp_available else "WhatsApp offline."
+                return whatsapp_web_controller.record_voice_note(p.get("number")) if hasattr(whatsapp_web_controller, 'record_voice_note') else "Not supported in Web."
 
             # ── Advanced Browser Controls ─────────────────────────
             if t == "BROWSER_READ_PAGE": return browser_controller.read_current_page() if _browser_available else "Browser offline."
@@ -281,21 +272,16 @@ class SiviController:
 
             # ── System Status / Memory / Weather ────────────────────────────
             if t == "SYSTEM_STATUS": return system_monitor.get_system_status()
-            if t == "GET_WEATHER":   return web_scraper.get_weather(p.get("location", "Delhi"))
+            if t == "GET_WEATHER":   return web_scraper.get_weather(p.get("location", ""))
             if t == "REMEMBER":  return memory_vault.remember(p.get("fact"))
             if t == "FORGET_ALL": return memory_vault.forget_all()
+            if t == "GRAPH_ADD": return knowledge_graph.add_relation(p.get("subject"), p.get("predicate"), p.get("object"))
+            if t == "GRAPH_QUERY": return knowledge_graph.query_entity(p.get("entity"))
             
             if t == "SWARM_RUN":
-                # Fire and forget swarm task
-                try:
-                    from core.swarm_manager import swarm_manager
-                    import asyncio
-                    # bridge_server's loop is the main one, we can import it or use a callback.
-                    # Since this runs in a thread, we'll return a placeholder string,
-                    # but Sivi handles the swarm result separately via websocket in a real setup.
-                    return f"Executing Swarm Agent for '{p.get('query')}'. Boss, main apne background agents ko bhej rahi hoon iska solution dhoondhne."
-                except Exception as e:
-                    return f"Swarm Error: {e}"
+                return swarm_manager.delegate_research(p.get("query"))
+            if t == "MOBILE_HANDOFF":
+                return mobile_handoff.send_to_mobile(p.get("message"))
 
             # ── Camera / Vision ───────────────────────────────────
             if t == "ANALYZE_EMOTION":
@@ -305,13 +291,19 @@ class SiviController:
             if t == "DESCRIBE_SCENE":
                 return camera_vision.describe_scene() if _camera_available else "Camera module offline."
 
-            # ── Timer ─────────────────────────────────────────────
+            # ── Timer & Scheduling ────────────────────────────────
             if t == "SET_TIMER":
                 return self._set_timer(p.get("seconds", 60), p.get("label", "Timer"))
+            if t == "SCHEDULE_TASK":
+                return task_queue.schedule_task(p.get("command"), p.get("instruction"), p.get("delay", 60))
+            if t == "LIST_SCHEDULED_TASKS":
+                return task_queue.list_pending_tasks()
 
             # ── Developer Tools ───────────────────────────────────
             if t == "DEV_RUN_CMD":      return dev_tools.run_command(p.get("command"))
             if t == "DEV_GIT_STATUS":   return dev_tools.get_git_status()
+            if t == "DEV_GIT_COMMIT":   return git_orchestrator.commit_and_push(p.get("message"))
+            if t == "DEV_RUN_TESTS":    return git_orchestrator.run_test_suite(p.get("cmd"))
             if t == "DEV_KILL_PORT":    return dev_tools.kill_port(p.get("port"))
             if t == "DEV_ANALYZE_CODE": return dev_tools.analyze_code(p.get("filename"))
             if t == "DEV_GENERATE_CODE": return dev_tools.generate_code(p.get("filename"), p.get("instructions"))
@@ -319,6 +311,8 @@ class SiviController:
             if t == "DEV_SPAWN_SUBAGENT":return dev_tools.spawn_subagent(p.get("goal"))
             if t == "DEV_OPEN_EDITOR":  return dev_tools.open_in_editor(p.get("filename"))
             if t == "DEV_CLOSE_EDITOR": return dev_tools.close_current_file()
+            if t == "DEV_MONITOR_LOGS": return log_detective.start_monitoring(p.get("filename"))
+            if t == "DEV_DB_QUERY":     return database_whisperer.execute_read_query(p.get("connection_string"), p.get("query"))
 
             # ── MCP Routing ───────────────────────────────────────
             if t == "MCP_CALL":
@@ -328,7 +322,6 @@ class SiviController:
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
                         # We're in a thread via asyncio.to_thread; use run_coroutine_threadsafe
-                        import concurrent.futures
                         future = asyncio.run_coroutine_threadsafe(
                             mcp_router.call_tool(p.get("server"), p.get("tool"), p.get("args")),
                             loop

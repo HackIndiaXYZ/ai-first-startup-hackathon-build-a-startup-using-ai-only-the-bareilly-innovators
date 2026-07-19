@@ -7,8 +7,8 @@ import sys
 import os
 
 # Setup paths
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "core"))
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -23,18 +23,18 @@ def test(name, fn):
         result = fn()
         if result is True or result is None:
             passed += 1
-            print(f"  ✅ PASS: {name}")
+            print(f"  PASS: {name}")
         elif result is False:
             failed += 1
             errors.append((name, "Returned False"))
-            print(f"  ❌ FAIL: {name} → returned False")
+            print(f"  FAIL: {name} -> returned False")
         else:
             passed += 1
-            print(f"  ✅ PASS: {name} → {result}")
+            print(f"  PASS: {name} -> {result}")
     except Exception as e:
         failed += 1
         errors.append((name, str(e)))
-        print(f"  ❌ FAIL: {name} → {e}")
+        print(f"  FAIL: {name} -> {e}")
 
 # ══════════════════════════════════════════════════════════════
 # 1. COMMAND PARSER
@@ -335,7 +335,7 @@ print("\n" + "="*60)
 print("MODULE 13: Email")
 print("="*60)
 
-from jarvis_email import email_manager
+from sivi_email import email_manager
 
 test("Import email_manager",  lambda: True)
 test("Has send_email",        lambda: hasattr(email_manager, "send_email"))
@@ -352,10 +352,10 @@ print("\n" + "="*60)
 print("MODULE 14: Mobile Controller")
 print("="*60)
 
-from mobile_controller import mobile_controller
+from mobile_handoff import mobile_handoff
 
-test("Import mobile_controller",   lambda: True)
-test("Has send_whatsapp_message",   lambda: hasattr(mobile_controller, "send_whatsapp_message"))
+test("Import mobile_handoff",   lambda: True)
+test("Has send_to_mobile",   lambda: hasattr(mobile_handoff, "send_to_mobile"))
 
 # ══════════════════════════════════════════════════════════════
 # 15. SPOTIFY CONTROLLER
@@ -485,13 +485,13 @@ test("Has clear_playback_queue", lambda: hasattr(AudioEngine, "clear_playback_qu
 test("Has release",             lambda: hasattr(AudioEngine, "release"))
 
 # ══════════════════════════════════════════════════════════════
-# 20. JARVIS CONTROLLER (Integration)
+# 20. SIVI CONTROLLER (Integration)
 # ══════════════════════════════════════════════════════════════
 print("\n" + "="*60)
-print("MODULE 20: Jarvis Controller (Integration Hub)")
+print("MODULE 20: Sivi Controller (Integration Hub)")
 print("="*60)
 
-from jarvis_controller import controller
+from sivi_controller import controller
 
 test("Import controller", lambda: True)
 
@@ -536,7 +536,7 @@ try:
     from core.audio_engine import AudioEngine as AE2
     from core.command_parser import parse_command as pc2
     from core.personality import build_system_prompt as bsp2
-    from core.jarvis_controller import controller as ctrl2
+    from core.sivi_controller import controller as ctrl2
     test("Bridge 'core.' imports resolve", lambda: True)
 except Exception as e:
     test("Bridge 'core.' imports resolve", lambda: (_ for _ in ()).throw(Exception(str(e))))
@@ -573,9 +573,9 @@ print("="*60)
 if errors:
     print("\nFailed tests:")
     for name, err in errors:
-        print(f"  ❌ {name}: {err}")
+        print(f"  FAIL {name}: {err}")
 
 if failed == 0:
-    print("\n🎉 ALL TESTS PASSED — System is 100% operational!")
+    print("\nALL TESTS PASSED - System is 100% operational!")
 else:
-    print(f"\n⚠️  {failed} test(s) need fixing.")
+    print(f"\n  {failed} test(s) need fixing.")

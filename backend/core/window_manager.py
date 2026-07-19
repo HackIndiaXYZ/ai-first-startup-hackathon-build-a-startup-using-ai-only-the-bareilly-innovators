@@ -17,12 +17,28 @@ class WindowManager:
         if sys.platform != "win32":
             return None
         found_hwnd = None
+        search = window_title.lower()
+        
         def callback(hwnd, extra):
             nonlocal found_hwnd
+            if found_hwnd:
+                return  # Already found
             if win32gui.IsWindowVisible(hwnd):
                 title = win32gui.GetWindowText(hwnd).lower()
-                if window_title.lower() in title:
+                if search in title:
                     found_hwnd = hwnd
+                    return
+                # Fallback: match against process name (e.g. "chrome" matches "chrome.exe")
+                try:
+                    _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                    import psutil
+                    proc = psutil.Process(pid)
+                    proc_name = proc.name().lower().replace(".exe", "")
+                    if search in proc_name:
+                        found_hwnd = hwnd
+                except Exception:
+                    pass
+        
         win32gui.EnumWindows(callback, None)
         return found_hwnd
 
@@ -39,14 +55,17 @@ class WindowManager:
         if hwnd:
             # Need to attach thread input to bypass Windows restrictions on foregrounding
             foreground_hwnd = win32gui.GetForegroundWindow()
-            foreground_thread = win32process.GetWindowThreadProcessId(foreground_hwnd)[0]
-            current_thread = win32api.GetCurrentThreadId()
-            
-            if foreground_thread != current_thread:
-                win32process.AttachThreadInput(foreground_thread, current_thread, True)
-                win32gui.SetForegroundWindow(hwnd)
-                win32gui.BringWindowToTop(hwnd)
-                win32process.AttachThreadInput(foreground_thread, current_thread, False)
+            if foreground_hwnd:
+                foreground_thread = win32process.GetWindowThreadProcessId(foreground_hwnd)[0]
+                current_thread = win32api.GetCurrentThreadId()
+                
+                if foreground_thread != current_thread:
+                    win32process.AttachThreadInput(foreground_thread, current_thread, True)
+                    win32gui.SetForegroundWindow(hwnd)
+                    win32gui.BringWindowToTop(hwnd)
+                    win32process.AttachThreadInput(foreground_thread, current_thread, False)
+                else:
+                    win32gui.SetForegroundWindow(hwnd)
             else:
                 win32gui.SetForegroundWindow(hwnd)
                 

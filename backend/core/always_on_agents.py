@@ -19,11 +19,13 @@ class AlwaysOnAgents:
         self.tasks = []
         self._running = False
 
-    def start(self, sivi_controller):
+    def start(self, sivi_controller, bridge_callback=None):
         """Start background polling tasks."""
+        self.sivi_controller = sivi_controller
+        if bridge_callback:
+            self._bridge_callback = bridge_callback
         if self._running: return
         self._running = True
-        self.sivi_controller = sivi_controller
         self.tasks.append(asyncio.create_task(self.poll_hacker_news()))
         # self.tasks.append(asyncio.create_task(self.poll_system_health()))
 
@@ -55,14 +57,13 @@ class AlwaysOnAgents:
                 
                 res = await text_llm.complete(prompt=prompt, system="You are Sivi, analyzing news.")
                 if res and "NO" not in res.upper() and len(res) > 10:
-                    # Deliver alert via bridge server HTTP endpoint
+                    # Deliver alert via bridge server callback
                     try:
-                        bridge_url = "http://localhost:8000"
-                        requests.post(
-                            f"{bridge_url}/voice/send-text",
-                            json={"text": f"[SYSTEM_EVENT: Breaking tech news: {res}. Alert the user proactively.]"},
-                            timeout=5
-                        )
+                        alert_msg = f"[SYSTEM_EVENT: Breaking tech news: {res}. Alert the user proactively.]"
+                        if hasattr(self, '_bridge_callback') and self._bridge_callback:
+                            await self._bridge_callback(alert_msg)
+                        else:
+                            logger.warning("No bridge_callback configured for HackerNews alert.")
                     except Exception as notify_err:
                         logger.error(f"Failed to deliver HN alert to bridge: {notify_err}")
             except asyncio.CancelledError:

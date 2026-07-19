@@ -1,72 +1,39 @@
 @echo off
-title SIVI AI — Advanced Voice Assistant
-color 0b
+title Sivi AI Server
+echo ===================================================
+echo Sivi AI - Development Server
+echo ===================================================
 
-echo.
-echo  ███████╗██╗██╗   ██╗██╗
-echo  ██╔════╝██║██║   ██║██║
-echo  ███████╗██║██║   ██║██║
-echo  ╚════██║██║╚██╗ ██╔╝██║
-echo  ███████║██║ ╚████╔╝ ██║
-echo  ╚══════╝╚═╝  ╚═══╝  ╚═╝
-echo.
-echo  Advanced Voice Assistant System
-echo  ================================================
-echo.
+cd /d "%~dp0"
 
-echo [1/4] Freeing Port 8000 (Backend Bridge Server)...
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr :8000 ^| findstr LISTENING') do (
-    taskkill /f /pid %%a 2>nul
+echo [1/3] Checking frontend build...
+if not exist "frontend\dist" (
+    echo Building React frontend for the first time...
+    cd frontend
+    call npm install
+    call npm run build
+    cd ..
 )
 
-echo [2/4] Freeing Port 5173 (Frontend Dashboard)...
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr :5173 ^| findstr LISTENING') do (
-    taskkill /f /pid %%a 2>nul
+echo [2/3] Checking Python virtual environment...
+if not exist "backend\venv" (
+    echo Creating Python venv...
+    python -m venv backend\venv
+    echo Installing backend dependencies...
+    backend\venv\Scripts\pip install -r backend\requirements.txt
 )
 
-echo [3/4] Killing old Node.js processes...
-taskkill /f /im node.exe 2>nul
-
-echo [4/4] Killing lingering Python processes...
-wmic process where "name='python.exe' and commandline like '%%Wake_Word%%'" call terminate >nul 2>&1
-wmic process where "name='python.exe' and commandline like '%%background_monitor%%'" call terminate >nul 2>&1
-wmic process where "name='python.exe' and commandline like '%%bridge_server%%'" call terminate >nul 2>&1
+echo [3/3] Starting Sivi...
+echo Sivi will automatically open in your browser at http://localhost:8000
+timeout /t 2 >nul
+start http://localhost:8000
 
 echo.
-echo Waiting 2 seconds for ports to clear...
-ping -n 3 127.0.0.1 >nul
-
+echo Press CTRL+C to stop the server.
 echo.
-echo ================================================
-echo  Launching SIVI AI Services
-echo ================================================
-echo.
+echo Starting Background Monitor...
+start /b backend\venv\Scripts\python.exe backend\core\background_monitor.py
 
-echo Starting Backend Bridge Server (Port 8000)...
-start "SIVI Backend" cmd /k "cd /d %~dp0backend && venv\Scripts\python bridge_server.py"
+backend\venv\Scripts\python.exe backend\bridge_server.py
 
-echo Waiting for backend to initialize...
-ping -n 5 127.0.0.1 >nul
-
-
-
-echo Starting Proactive Background Monitor...
-start "SIVI Background" cmd /k "cd /d %~dp0backend && venv\Scripts\python core\background_monitor.py"
-
-echo Starting Frontend Dashboard (Port 5173)...
-start "SIVI Frontend" cmd /k "cd /d %~dp0frontend && npm run dev"
-
-echo.
-echo ================================================
-echo   All systems GO!
-echo   Dashboard: http://localhost:5173
-echo   API:       http://localhost:8000
-echo   Docs:      http://localhost:8000/docs
-echo ================================================
-echo.
-echo  Voice Commands Ready:
-echo  - Say wake word to activate
-echo  - "Hey Sivi" or your custom wake word
-echo  - Or use the dashboard at localhost:5173
-echo.
-ping -n 5 127.0.0.1 >nul
+pause

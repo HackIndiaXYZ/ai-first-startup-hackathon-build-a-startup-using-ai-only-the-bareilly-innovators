@@ -12,7 +12,7 @@ except ImportError:
     genai = None
 
 
-from genai_runner import run_with_key_pool
+from core.genai_runner import run_with_key_pool
 
 class ScreenReader:
     def __init__(self):

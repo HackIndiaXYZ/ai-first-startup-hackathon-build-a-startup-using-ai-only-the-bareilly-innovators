@@ -21,14 +21,26 @@ class AgentOrchestrator:
         Evaluate if a task is complex (research, coding, RAG) or simple.
         If complex, run in background and use the callback to speak the result.
         """
-        # If it's a RAG query
-        if "document" in command.lower() or "read my files" in command.lower() or "rag" in command.lower():
+        cmd_lower = command.lower()
+        
+        # RAG queries — use specific phrases to avoid false positives
+        # ("I documented the bug" should NOT route to RAG)
+        rag_triggers = [
+            "search my documents", "read my files", "search my files",
+            "find in documents", "query documents", "rag search",
+            "look in my documents", "what do my documents say",
+        ]
+        if any(trigger in cmd_lower for trigger in rag_triggers):
             logger.info("Routing to RAG Engine...")
             asyncio.create_task(self._run_rag_agent(command, send_response_callback))
             return True
             
-        # If it's code analysis
-        if "analyze code" in command.lower() or "debug this" in command.lower():
+        # Code analysis — use specific phrases
+        code_triggers = [
+            "analyze this code", "debug this code", "review this code",
+            "find bugs in this code", "explain this code",
+        ]
+        if any(trigger in cmd_lower for trigger in code_triggers):
             logger.info("Routing to Code Agent...")
             asyncio.create_task(self._run_code_agent(command, send_response_callback))
             return True

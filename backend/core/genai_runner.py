@@ -19,7 +19,7 @@ except ImportError:
     APIError = Exception
     _genai_available = False
 
-from gemini_key_pool import key_pool
+from core.gemini_key_pool import key_pool
 
 logger = logging.getLogger("sivi.genai_runner")
 MAX_WAIT_SECONDS = 10
@@ -50,7 +50,7 @@ def run_with_key_pool(func: Callable) -> Any:
             )
             time.sleep(wait)
             key = key_pool.get()
-            
+            tried.add(key)  # FIX: prevent infinite loop if all keys permanently disabled
             client = genai.Client(api_key=key)
             try:
                 return func(client)

@@ -19,7 +19,7 @@ logger = logging.getLogger("sivi.gemini_live")
 
 # Key pool import — safe: falls back gracefully if pool unavailable
 try:
-    from gemini_key_pool import key_pool as _key_pool
+    from core.gemini_key_pool import key_pool as _key_pool
 except Exception:
     _key_pool = None
 
@@ -273,7 +273,7 @@ class GeminiLiveClient:
         try:
             await self._ws.send(json.dumps(msg))
         except Exception as e:
-            logger.error(f"Error sending audio: {e}")
+            logger.debug(f"Error sending audio: {e}")
 
     async def send_text(self, text: str):
         """Send text message to Gemini (like typing a message)."""

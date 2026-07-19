@@ -22,8 +22,12 @@ class KeyboardController:
             # Unicode/Hindi text: copy to clipboard then paste
             try:
                 import pyperclip
+                import time
+                original_clipboard = pyperclip.paste()
                 pyperclip.copy(text)
                 pyautogui.hotkey('ctrl', 'v')
+                time.sleep(0.1) # Wait for paste to complete
+                pyperclip.copy(original_clipboard)
             except ImportError:
                 # Fallback: use PowerShell to set clipboard
                 try:
