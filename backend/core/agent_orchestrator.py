@@ -8,7 +8,9 @@ so that real-time system control isn't blocked.
 import asyncio
 import logging
 from core.text_llm import text_llm
+from core.openrouter_llm import openrouter_llm
 from core.rag_engine import rag_engine
+from core.groq_brain import groq_brain
 
 logger = logging.getLogger("sivi.agent_orchestrator")
 
@@ -53,9 +55,20 @@ class AgentOrchestrator:
             await callback(result)
 
     async def _run_code_agent(self, command, callback):
-        # In a real scenario, this would read the filesystem
-        prompt = f"User wants help with coding: {command}. Provide a concise 1-2 sentence summary of what needs to be done."
-        result = await text_llm.complete(prompt=prompt, system="You are Sivi, an expert coder.")
+        # Delegate code analysis strictly to Groq (fallback to OpenRouter)
+        result = await groq_brain.analyze_code(command)
+        if "API limit reached" in result:
+            logger.info("Groq unavailable, falling back to OpenRouter for code analysis.")
+            result = await openrouter_llm.analyze_code(command)
+        if callback:
+            await callback(result)
+
+    async def run_deep_research(self, topic, callback):
+        # Deep Research trigger via Groq (fallback to OpenRouter)
+        result = await groq_brain.research(topic)
+        if "API limit reached" in result:
+            logger.info("Groq unavailable, falling back to OpenRouter for deep research.")
+            result = await openrouter_llm.deep_research(topic)
         if callback:
             await callback(result)
 

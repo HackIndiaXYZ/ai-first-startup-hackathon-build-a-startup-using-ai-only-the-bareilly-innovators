@@ -53,7 +53,7 @@ class CameraVision:
             try:
                 def make_call(client):
                     return client.models.generate_content(
-                        model='gemini-2.0-flash',
+                        model='gemini-2.5-flash',
                         contents=[
                             "Look at this webcam image. In ONE short sentence, describe the person's "
                             "apparent mood or emotion (e.g., 'looks focused', 'seems tired', 'appears happy'). "
@@ -80,7 +80,7 @@ class CameraVision:
             try:
                 def make_call(client):
                     return client.models.generate_content(
-                        model='gemini-2.0-flash',
+                        model='gemini-2.5-flash',
                         contents=[
                             "Look at this webcam image. In ONE short sentence, assess the person's "
                             "physical state: posture, signs of fatigue/stress, or if they look healthy. "

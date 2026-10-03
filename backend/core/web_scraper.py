@@ -11,7 +11,20 @@ class WebScraper:
         try:
             # Use clean format to avoid emoji corruption: Location: Condition +Temp
             loc_path = location.strip()
-            url = f"https://wttr.in/{loc_path}?format=\"%l:+%C+%t\""
+            
+            # Clean up common prepositions
+            lower_loc = loc_path.lower()
+            for prefix in ["in ", "of ", "for ", "mein "]:
+                if lower_loc.startswith(prefix):
+                    loc_path = loc_path[len(prefix):].strip()
+                    lower_loc = loc_path.lower()
+            
+            for suffix in [" ka", " ki", " ke", " mein", " me"]:
+                if lower_loc.endswith(suffix):
+                    loc_path = loc_path[:-len(suffix)].strip()
+                    lower_loc = loc_path.lower()
+                    
+            url = f"https://wttr.in/{loc_path}?format=\"%l:+%C+%t\"&lang=hi"
             response = requests.get(url, timeout=5)
             response.raise_for_status()
             
@@ -22,6 +35,6 @@ class WebScraper:
             return weather_data
         except Exception as e:
             print(f" Weather fetch error: {e}")
-            return "Failed to fetch weather information."
+            return "मैं अभी मौसम की जानकारी नहीं ला पा रही हूँ।"
 
 web_scraper = WebScraper()

@@ -32,6 +32,7 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("sivi.bridge")
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 import queue
 
@@ -104,6 +105,7 @@ _main_loop: Optional[asyncio.AbstractEventLoop] = None
 
 # In-memory stores
 command_history: list[dict] = []
+pending_confirmation_cmd = None
 
 CHAT_HISTORY_FILE = os.path.join(os.path.dirname(__file__), "data", "sivi_chat_history.json")
 
@@ -227,6 +229,13 @@ def on_gemini_connected():
     sivi_state["orb_state"] = "listening"
     sivi_state["status_text"] = "Sun rahi hoon..."
     broadcast_sync({"type": "state", **sivi_state})
+    
+    # Phase 1: Flush pending offline phone commands
+    try:
+        from core.mobile_handoff import mobile_handoff
+        mobile_handoff.flush_pending_commands()
+    except Exception as e:
+        logger.error(f"Failed to flush phone queue: {e}")
 
 
 def on_gemini_disconnected():
@@ -370,13 +379,51 @@ def on_turn_complete(user_text: str, sivi_text: str):
             self_learning.log_user_correction(user_text, correction_context)
             logger.info(f"[SelfLearn] User correction detected: {user_text[:60]}")
 
+    # ── Phase 3: Voice-Gated Confirmation Flow ──────────────────
+    global pending_confirmation_cmd
+    
+    if user_text and pending_confirmation_cmd:
+        user_lower = user_text.lower().strip()
+        confirm_words = ["yes", "yeah", "yep", "do it", "confirm", "sure", "ha", "haan"]
+        cancel_words = ["no", "cancel", "stop", "don't", "nahi", "ruk"]
+        
+        is_confirm = any(user_lower.startswith(w) or user_lower.endswith(w) for w in confirm_words)
+        is_cancel = any(user_lower.startswith(w) or user_lower.endswith(w) for w in cancel_words)
+        
+        if is_cancel:
+            logger.info("[Safety] User CANCELLED pending command.")
+            pending_confirmation_cmd = None
+            if gemini_client and gemini_client.is_connected:
+                asyncio.create_task(gemini_client.send_text("Safety: I have cancelled the operation as requested."))
+            return
+            
+        elif is_confirm:
+            logger.info(f"[Safety] User CONFIRMED pending command: {pending_confirmation_cmd.type}")
+            # Temporarily bypass confirmation for execution
+            setattr(pending_confirmation_cmd, "requires_confirmation", False)
+            extracted_cmds.insert(0, pending_confirmation_cmd)
+            pending_confirmation_cmd = None
+
+    if not extracted_cmds and user_text:
+        # Fallback: If Gemini didn't output a tag, maybe it was a direct command that was missed.
+        # Run deterministic fast parser on raw user text.
+        fallback_cmd = parse_command(user_text)
+        if fallback_cmd:
+            logger.info(f"[Fallback] Deterministic parser caught command missed by Gemini: {fallback_cmd.type}")
+            extracted_cmds.append(fallback_cmd)
+
     if extracted_cmds:
         async def _execute_and_feedback():
             all_feedback = []
             has_error = False
             
             for extracted_cmd in extracted_cmds:
-                cmd = parse_command(extracted_cmd)
+                if hasattr(extracted_cmd, "type") and hasattr(extracted_cmd, "params"):
+                    # Already a parsed PCCommand (from confirmation flow)
+                    cmd = extracted_cmd
+                else:
+                    cmd = parse_command(extracted_cmd)
+                
                 if not cmd:
                     # Check if it's a workflow/macro trigger
                     from core.workflow_engine import workflow_engine
@@ -398,19 +445,44 @@ def on_turn_complete(user_text: str, sivi_text: str):
                                 await asyncio.sleep(0.5)
                         continue  # Skip to next CMD tag
 
-                    logger.warning(f"Failed to parse AI command tag: {extracted_cmd}")
-                    # Log to self-learning engine
-                    self_learning.log_error(
-                        user_text=user_text,
-                        cmd_tag=extracted_cmd,
-                        cmd_type="PARSE_FAIL",
-                        error_msg=f"The command tag `[CMD: {extracted_cmd}]` was not recognized by the parser.",
-                    )
-                    all_feedback.append(f"SYSTEM_ERROR: The command tag `[CMD: {extracted_cmd}]` was not recognized.")
-                    has_error = True
-                    continue
+                    logger.warning(f"Failed to parse AI command tag: {extracted_cmd}. Trying Groq fuzzy match...")
                     
+                    from core.command_parser import parse_voice_command_async
+                    # Ask Groq to fix it
+                    fixed_cmd = await parse_voice_command_async(extracted_cmd)
+                    if fixed_cmd:
+                        logger.info(f"[Groq Fallback] Successfully repaired tag into: {fixed_cmd.type}")
+                        cmd = fixed_cmd
+                    else:
+                        # Log to self-learning engine
+                        self_learning.log_error(
+                            user_text=user_text,
+                            cmd_tag=extracted_cmd,
+                            cmd_type="PARSE_FAIL",
+                            error_msg=f"The command tag `[CMD: {extracted_cmd}]` was not recognized by the parser.",
+                        )
+                        all_feedback.append(f"SYSTEM_ERROR: The command tag `[CMD: {extracted_cmd}]` was not recognized.")
+                        has_error = True
+                        continue
+                    
+                # We now have a valid cmd
                 logger.info(f"Parsed command from tag: {cmd.type} -> {cmd.params}")
+                
+                # ── SHOW_RESEARCH: Dynamic Hologram UI Hook ──
+                if cmd.type == "SHOW_RESEARCH":
+                    topic = cmd.params.get("topic", "").strip()
+                    if topic:
+                        logger.info(f"[HologramUI] Fetching research for: {topic}")
+                        # Immediately send skeleton
+                        broadcast_sync({"type": "dynamic_card", "action": "show", "data": {"category": "LOADING", "title": topic}})
+                        try:
+                            from core.dynamic_engine import dynamic_engine
+                            research_data = await dynamic_engine.fetch_topic_research(topic)
+                            broadcast_sync({"type": "dynamic_card", "action": "show", "data": research_data})
+                        except Exception as e:
+                            logger.error(f"[HologramUI] Failed to fetch: {e}")
+                            broadcast_sync({"type": "dynamic_card", "action": "hide"})
+                    continue
 
                 # ── SWITCH_MODE: Handle inline here since it changes bridge_server settings ──
                 if cmd.type == "SWITCH_MODE":
@@ -433,6 +505,13 @@ def on_turn_complete(user_text: str, sivi_text: str):
                         logger.info(f"Command routed to background agent for user intent: {user_text[:60]}")
                         continue
                         
+                    # ── Safety Check: Voice-Gated Confirmation ──
+                    if getattr(cmd, "requires_confirmation", False):
+                        logger.warning(f"[Safety] Command {cmd.type} requires confirmation. Halting execution.")
+                        pending_confirmation_cmd = cmd
+                        all_feedback.append(f"SECURITY WARNING: This action ({cmd.type}) requires user confirmation. ASK THE USER EXPLICITLY: 'Are you sure you want to do this?' and wait for their 'Yes' or 'No'. Do not execute it yourself yet.")
+                        continue
+                        
                     # Offload blocking execution to a separate thread with a failsafe timeout
                     result = None
                     error_occurred = False
@@ -442,10 +521,10 @@ def on_turn_complete(user_text: str, sivi_text: str):
                     try:
                         result = await asyncio.wait_for(
                             asyncio.to_thread(controller.execute_command, cmd),
-                            timeout=35.0
+                            timeout=60.0
                         )
                     except asyncio.TimeoutError:
-                        result = "SYSTEM_ERROR: Command execution timed out after 35 seconds."
+                        result = "SYSTEM_ERROR: Command execution timed out after 60 seconds."
                         error_occurred = True
                         error_msg = result
                     except Exception as exc:
@@ -477,7 +556,7 @@ def on_turn_complete(user_text: str, sivi_text: str):
                             try:
                                 retry_result = await asyncio.wait_for(
                                     asyncio.to_thread(controller.execute_command, cmd),
-                                    timeout=35.0
+                                    timeout=60.0
                                 )
                                 if retry_result and not str(retry_result).startswith("SYSTEM_ERROR:"):
                                     # Retry succeeded!
@@ -582,14 +661,24 @@ def on_turn_complete(user_text: str, sivi_text: str):
                         error_msg=str(e),
                         stack_trace=tb.format_exc(),
                     )
-                    all_feedback.append(f"ERROR executing {cmd.type}: {e}")
+                    
+                    # Fast Groq Diagnosis
+                    groq_fix = await self_learning.auto_diagnose(
+                        extracted_cmd,
+                        cmd.type if cmd else "UNKNOWN",
+                        str(e)
+                    )
+                    if groq_fix:
+                        all_feedback.append(f"ERROR executing {cmd.type}: {e}. GROQ SUGGESTED FIX: {groq_fix}")
+                    else:
+                        all_feedback.append(f"ERROR executing {cmd.type}: {e}")
                     has_error = True
 
             # Send single batched feedback back to Gemini
             if all_feedback and gemini_client and gemini_client.is_connected:
                 final_prompt = "System Actions Results:\n- " + "\n- ".join(all_feedback) + "\nConvey results affectionately to the user. CRITICAL RULE: DO NOT output any [CMD: ...] tags in your response to this result."
                 if has_error:
-                    final_prompt += "\nSome commands failed. Think about WHY and explain concisely. If you can fix it with a different [CMD: ...] tag, do it now."
+                    final_prompt += "\nSome commands failed. I have used my fast-thinking Groq brain to diagnose them. If Groq provided a corrected [CMD: ...] tag in the results above, output it now. Otherwise, explain the failure concisely."
                 await gemini_client.send_text(final_prompt)
 
         if _main_loop:
@@ -648,10 +737,8 @@ def on_mic_chunk(pcm_bytes: bytes):
     """
     # Prevent Sivi from hearing her own voice through the speakers (Acoustic Echo)
     if audio_engine and audio_engine.is_speaking:
+        # Disabled amplitude-based barge-in to prevent self-interruption from her own speaker audio.
         return
-
-    # ── WAKE GATE DISABLED: Always send mic audio to Gemini ──
-    pass
 
     if gemini_client and gemini_client.is_connected and _main_loop is not None:
         try:
@@ -697,6 +784,9 @@ async def start_voice_session(is_switch: bool = False):
     user_name = settings.get("user_name", "Rao Alok Yadav")
     personality = settings.get("personality_mode", "sivi")
     system_prompt = build_system_prompt(user_name, personality)
+    
+    # Phase 1: Dynamic Hologram Interface Instruction
+    system_prompt += "\n\nCRITICAL INSTRUCTION FOR VISUALS:\nYou are Sivi, an advanced visual AI. You have a holographic screen (the Dashboard). If the user asks you to explain, teach, research, or tell them about a specific topic (e.g. 'tell me about black holes', 'who is elon musk', 'search for taj mahal'), you MUST output the tag `[CMD: SHOW_RESEARCH: <topic>]` alongside your spoken explanation. The <topic> inside the tag MUST ALWAYS BE TRANSLATED TO ENGLISH, even if the user speaks in Hindi. Do not say 'I am showing it on the screen' every time; just naturally explain the topic while the system handles the visuals."
 
     # Inject recent command history for self-learning / context memory
     if command_history:
@@ -871,18 +961,21 @@ async def lifespan(app: FastAPI):
     agents.start(controller, safe_agent_callback)
 
     # ── Phase 3: Mobile Handoff — start Telegram polling ──────────────
-    def _mobile_cmd_callback(text: str):
-        """Inject phone command into Gemini Live stream."""
+    def _mobile_cmd_callback(text: str) -> bool:
+        """Inject phone command into Gemini Live stream. Returns False if disconnected."""
         if gemini_client and gemini_client.is_connected and _main_loop:
             asyncio.run_coroutine_threadsafe(
                 gemini_client.send_text(text), _main_loop
             )
+            return True
         else:
-            logger.warning(f"[MobileHandoff] Gemini not connected, dropping: {text}")
+            logger.warning(f"[MobileHandoff] Gemini offline, queueing: {text}")
+            return False
 
     try:
         from core.mobile_handoff import mobile_handoff
         mobile_handoff.start_polling(_mobile_cmd_callback)
+        mobile_handoff.start_polling_on_loop()
         if mobile_handoff.is_configured():
             logger.info("[MobileHandoff] ✅ Telegram polling active — phone commands enabled.")
         else:
@@ -919,7 +1012,7 @@ async def _auto_start_voice_on_boot():
     no need to open the dashboard and click 'Start Voice'.
     Waits for an API key to be available before attempting.
     """
-    await asyncio.sleep(5)  # Let server fully initialize first
+    await asyncio.sleep(1)  # Let server fully initialize first
     try:
         from core.gemini_key_pool import key_pool
         if key_pool.key_count == 0:
@@ -1068,6 +1161,19 @@ async def notification_worker():
                         # Send context to Gemini to announce it
                         prompt = f"[SYSTEM ALERT: The user just received new PC notifications: '{alert_text}'. Inform them immediately in a short, conversational, and helpful way.]"
                         await gemini_client.send_text(prompt)
+                        
+                        # Phase 5B: Proactive push to phone
+                        try:
+                            from core.mobile_handoff import mobile_handoff
+                            # Extract app name from first alert if available for dynamic button
+                            app_name = alerts[0].split(":")[0] if ":" in alerts[0] else "App"
+                            mobile_handoff.send_to_mobile(
+                                f"🔔 **PC Notification**\n\n{alert_text}", 
+                                button_set="default"
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to push notification to phone: {e}")
+                            
                         sivi_state["orb_state"] = "thinking"
                         sivi_state["status_text"] = "Reading notification..."
                         await broadcast({"type": "state", **sivi_state})
@@ -1284,6 +1390,26 @@ async def get_dashboard_data():
     except Exception:
         news_list = ["News unavailable."]
 
+    # 5. Advanced Telemetry (Phase 6)
+    # 5. Advanced Telemetry (Phase 6)
+    try:
+        from core.process_manager import process_manager
+        processes = process_manager.get_running_processes(limit=5)
+    except Exception:
+        processes = []
+
+    try:
+        from core.system_controller import system_controller
+        disk_raw = system_controller.get_disk_info()
+    except Exception:
+        disk_raw = "Disk: Unknown"
+
+    try:
+        from core.network_diagnostics import network_diagnostics
+        net_stats = network_diagnostics.get_connection_status()
+    except Exception:
+        net_stats = "Offline"
+
     return {
         "weather": weather,
         "system": {
@@ -1293,7 +1419,12 @@ async def get_dashboard_data():
             "speed_down": round(speed_mbps, 1)
         },
         "calendar": calendar_events,
-        "news": news_list
+        "news": news_list,
+        "telemetry": {
+            "processes": processes,
+            "disk": disk_raw,
+            "network": net_stats
+        }
     }
 
 
@@ -1557,6 +1688,15 @@ async def get_mobile_status():
         return mobile_handoff.get_status()
     except Exception as e:
         return {"error": str(e), "configured": False}
+
+@app.get("/mobile-history")
+async def get_mobile_history():
+    """Return offline queued commands."""
+    try:
+        from core.mobile_handoff import mobile_handoff
+        return {"queue": list(mobile_handoff._pending_inbound_commands)}
+    except Exception as e:
+        return {"error": str(e), "queue": []}
 
 
 @app.post("/mobile-send")

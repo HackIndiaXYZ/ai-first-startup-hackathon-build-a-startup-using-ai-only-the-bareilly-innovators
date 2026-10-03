@@ -40,12 +40,12 @@ except ImportError:
 MIC_SAMPLE_RATE = 16000
 SPEAKER_SAMPLE_RATE = 24000
 CHANNELS = 1
-CHUNK_SIZE = 4096
+CHUNK_SIZE = 1024
 DTYPE = np.int16
 
 # How long silence must persist before we consider speaking done (seconds)
-# Increased to 0.8 to allow room echo/reverb to fully decay before opening mic
-SPEAKING_SILENCE_THRESHOLD = 0.8
+# Increased to 0.8 to prevent Sivi from hearing her own voice (Acoustic Echo)
+SPEAKING_SILENCE_THRESHOLD = 0.5
 
 
 class AudioEngine:
@@ -59,7 +59,7 @@ class AudioEngine:
         self._playing = False
         self._muted = False
         self._speaking = False  # True when Sivi is outputting audio
-        self.noise_gate_threshold = 0.01  # RMS threshold below which mic audio is zeroed out
+        self.noise_gate_threshold = 0.015  # Increased to reject surrounding crowd noise
 
         # Playback queue for received audio chunks
         self._playback_queue: queue.Queue[bytes] = queue.Queue()
@@ -149,7 +149,10 @@ class AudioEngine:
                                 pcm_bytes = b'\x00' * len(pcm_bytes)
                             self.on_audio_chunk(pcm_bytes)
         except Exception as e:
-            logger.error(f"Mic error (sounddevice): {e}")
+            if "Stream is stopped" in str(e) and not self._recording:
+                pass  # Expected during shutdown
+            else:
+                logger.error(f"Mic error (sounddevice): {e}")
         finally:
             self._recording = False
             self._mic_stream = None

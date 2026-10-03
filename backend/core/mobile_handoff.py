@@ -1,27 +1,27 @@
 """
-Sivi — Mobile Handoff (Phase 3 — Full Implementation)
+Sivi — Mobile Handoff (Advanced Implementation)
 ======================================================
-Full bidirectional mobile communication layer.
+Full bidirectional mobile communication layer via Telegram Bot API.
 
 Features:
-  - Push alerts to phone via Telegram Bot API
-  - Receive commands FROM phone via Telegram (polling)
+  - Push alerts to phone via Telegram with rich context menus
+  - Receive commands FROM phone via Telegram (polling) with persist offset
   - Send rich media: photos, files, voice notes
-  - WhatsApp fallback via WhatsApp Business API (optional)
-  - Inline keyboard buttons for quick phone replies
-  - Real-time sync: phone commands inject into Sivi's Gemini stream
-  - Conversation threading — Telegram messages appear in Sivi chat UI
-  - Auto-reconnect polling with exponential backoff
+  - Receive rich media: process phone images (Gemini Vision) and voice notes
+  - Two-way queue: offline command queue (phone->PC) and retry queue (PC->phone)
+  - Smart bypass: simple PC commands instantly execute without Gemini roundtrip
+  - Interactive /menu for PC control grid on phone
 """
 
 import os
 import logging
 import asyncio
-import threading
 import time
 import json
 import base64
+import tempfile
 from typing import Optional, Callable
+from collections import deque
 from datetime import datetime
 
 import httpx
@@ -35,40 +35,63 @@ POLL_INTERVAL     = 1.0   # seconds — between polls when no updates
 MAX_MESSAGE_LEN   = 4000  # Telegram limit
 RECONNECT_BACKOFF = [2, 5, 10, 30, 60]   # seconds between retries
 
+# Data files
+OFFSET_FILE = os.path.expanduser("~/.sivi_telegram_offset.json")
+MEDIA_CACHE_DIR = os.path.expanduser("~/.sivi_mobile_media")
+os.makedirs(MEDIA_CACHE_DIR, exist_ok=True)
+
+# ── Button Sets ───────────────────────────────────────────────────────────────
+BUTTON_SETS = {
+    "timer": [
+        [{"text": "⏳ Snooze 5m", "callback_data": "cmd:set timer for 5 minutes"}],
+        [{"text": "✅ Done", "callback_data": "done"}]
+    ],
+    "system": [
+        [{"text": "💻 System Status", "callback_data": "cmd:system status"}, 
+         {"text": "📸 Screenshot", "callback_data": "cmd:take screenshot"}]
+    ],
+    "file": [
+        [{"text": "✅ Done", "callback_data": "done"}]
+    ],
+    "default": [
+        [{"text": "✅ Done", "callback_data": "done"},
+         {"text": "📊 Status", "callback_data": "cmd:system status"}]
+    ],
+    "menu": [
+        [{"text": "📸 Screen", "callback_data": "cmd:take screenshot"}, {"text": "🔒 Lock PC", "callback_data": "cmd:lock screen"}, {"text": "💻 Status", "callback_data": "cmd:system status"}],
+        [{"text": "🔊 Vol Up", "callback_data": "cmd:volume up"}, {"text": "🔉 Vol Down", "callback_data": "cmd:volume down"}, {"text": "🔇 Mute", "callback_data": "cmd:mute the volume"}],
+        [{"text": "☀️ Bright+", "callback_data": "cmd:brightness up"}, {"text": "🌙 Bright-", "callback_data": "cmd:brightness down"}, {"text": "😴 Sleep PC", "callback_data": "cmd:sleep mode"}],
+        [{"text": "📋 Clipboard", "callback_data": "cmd:what's on clipboard"}, {"text": "📰 News", "callback_data": "cmd:news"}, {"text": "📅 Calendar", "callback_data": "cmd:calendar"}]
+    ]
+}
+
 
 class MobileHandoffManager:
-    """
-    Sivi's Full Mobile Bridge.
-
-    Supports:
-      - send_to_mobile(text)        → push text alert to Telegram
-      - send_photo_to_mobile(path)  → push screenshot/photo
-      - send_file_to_mobile(path)   → push any file
-      - start_polling(callback)     → receive phone commands → inject into Sivi
-      - stop_polling()              → stop background polling
-    """
-
     def __init__(self):
         self.bot_token   = os.getenv("TELEGRAM_BOT_TOKEN",  "").strip()
         self.chat_id     = os.getenv("TELEGRAM_CHAT_ID",    "").strip()
         self._base_url   = TELEGRAM_API_BASE.format(token=self.bot_token)
 
-        # Callback: called when user sends command from phone
-        # Signature: callback(text: str) → None
         self._command_callback: Optional[Callable[[str], None]] = None
-
-        # Polling state
+        
+        # State
         self._polling   = False
         self._poll_task: Optional[asyncio.Task] = None
-        self._last_update_id = 0
+        self._outbound_worker_task: Optional[asyncio.Task] = None
+        self._last_update_id = self._load_offset()
         self._http = httpx.AsyncClient(timeout=60.0)
+        
+        # Queues
+        self._pending_inbound_commands = deque(maxlen=50) # Commands from phone waiting for Gemini
+        self._outbound_queue = asyncio.Queue()            # Messages waiting to be sent to phone
 
         # Stats
         self.messages_sent     = 0
         self.messages_received = 0
         self.last_error        = ""
+        self.last_activity     = 0.0
 
-    # ── Configuration Check ───────────────────────────────────────────────────
+    # ── Configuration & Persist ───────────────────────────────────────────────
 
     def is_configured(self) -> bool:
         return bool(self.bot_token and self.chat_id)
@@ -79,209 +102,244 @@ class MobileHandoffManager:
             "polling_active":    self._polling,
             "messages_sent":     self.messages_sent,
             "messages_received": self.messages_received,
+            "inbound_queue":     len(self._pending_inbound_commands),
+            "outbound_queue":    self._outbound_queue.qsize(),
             "chat_id":           self.chat_id if self.chat_id else "not set",
             "last_error":        self.last_error,
+            "last_activity_sec": round(time.time() - self.last_activity, 1) if self.last_activity else -1,
         }
+
+    def _load_offset(self) -> int:
+        try:
+            if os.path.exists(OFFSET_FILE):
+                with open(OFFSET_FILE, "r") as f:
+                    return json.load(f).get("update_id", 0)
+        except Exception:
+            pass
+        return 0
+
+    def _save_offset(self, update_id: int):
+        try:
+            with open(OFFSET_FILE, "w") as f:
+                json.dump({"update_id": update_id}, f)
+        except Exception:
+            pass
+
+    # ── Outbound Queue Worker (Retry Logic) ───────────────────────────────────
+
+    async def _outbound_worker(self):
+        """Worker that processes outbound messages and retries on failure."""
+        logger.info("[MobileHandoff] Outbound worker started.")
+        while self._polling:
+            try:
+                task = await self._outbound_queue.get()
+                payload, files, endpoint, retries = task
+                
+                success = False
+                backoff = 2
+                
+                for attempt in range(retries):
+                    try:
+                        if files:
+                            # Requires multipart form
+                            resp = await self._http.post(
+                                f"{self._base_url}/{endpoint}",
+                                data=payload,
+                                files=files,
+                                timeout=20.0
+                            )
+                        else:
+                            resp = await self._http.post(
+                                f"{self._base_url}/{endpoint}",
+                                json=payload,
+                                timeout=15.0
+                            )
+                            
+                        if resp.status_code == 200:
+                            self.messages_sent += 1
+                            self.last_activity = time.time()
+                            success = True
+                            break
+                        else:
+                            self.last_error = f"HTTP {resp.status_code}: {resp.text[:100]}"
+                            logger.error(f"[MobileHandoff] Send failed: {self.last_error}")
+                    except Exception as e:
+                        self.last_error = str(e)
+                        logger.error(f"[MobileHandoff] Send exception (attempt {attempt+1}/{retries}): {e}")
+                        
+                    if attempt < retries - 1:
+                        await asyncio.sleep(backoff)
+                        backoff *= 2
+                        
+                if not success:
+                    logger.warning("[MobileHandoff] Message permanently dropped after retries.")
+                    
+                self._outbound_queue.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"[MobileHandoff] Outbound worker error: {e}")
+                await asyncio.sleep(1)
+
+    def _queue_outbound(self, endpoint: str, payload: dict, files=None, retries=3):
+        """Queue a request to be sent to Telegram."""
+        if not self.is_configured():
+            return
+        if self._polling:
+            self._outbound_queue.put_nowait((payload, files, endpoint, retries))
+        else:
+            logger.warning("[MobileHandoff] Polling not active, dropping outbound message.")
 
     # ── Send Methods ──────────────────────────────────────────────────────────
 
-    def send_to_mobile(self, message: str) -> str:
-        """
-        Sync entry point (called from sivi_controller.execute_command).
-        Schedules an async send on the main event loop.
-        """
+    def send_to_mobile(self, message: str, button_set: str = "default") -> str:
+        """Sync entry point to push message."""
         if not self.is_configured():
-            return (
-                "Boss, Telegram configure nahi hai. "
-                ".env mein TELEGRAM_BOT_TOKEN aur TELEGRAM_CHAT_ID add karein."
-            )
+            return "Telegram missing."
         if not message:
-            return "Koi message nahi hai bhejne ke liye Boss."
+            return "Empty message."
+            
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.run_coroutine_threadsafe(self.send_text_async(message, parse_mode="Markdown", button_set=button_set), loop)
+        else:
+            loop.run_until_complete(self.send_text_async(message, parse_mode="Markdown", button_set=button_set))
+        return "Message sent to mobile."
 
-        # Fire-and-forget on main loop
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.run_coroutine_threadsafe(self._send_text_async(message), loop)
-                return "Message aapke phone pe bhej diya Boss! 📱"
-            else:
-                loop.run_until_complete(self._send_text_async(message))
-                return "Message aapke phone pe bhej diya Boss! 📱"
-        except Exception as e:
-            logger.error(f"[MobileHandoff] send_to_mobile error: {e}")
-            return f"Phone pe message bhejne mein error aaya: {e}"
-
-    async def send_text_async(self, message: str, parse_mode: str = "Markdown") -> bool:
-        """Async send text message to Telegram."""
-        return await self._send_text_async(message, parse_mode)
-
-    async def _send_text_async(self, message: str, parse_mode: str = "Markdown") -> bool:
-        """Internal async Telegram message sender."""
+    async def send_text_async(self, message: str, parse_mode: str = "Markdown", button_set: str = "default") -> bool:
         if not self.is_configured():
             return False
 
-        # Truncate if needed
         if len(message) > MAX_MESSAGE_LEN:
             message = message[:MAX_MESSAGE_LEN - 3] + "..."
 
-        # Format with Sivi branding
         formatted = f"🤖 *Sivi Alert*\n\n{message}\n\n_{datetime.now().strftime('%I:%M %p, %d %b')}_"
+        
+        buttons = BUTTON_SETS.get(button_set, BUTTON_SETS["default"])
+        if button_set == "none":
+            reply_markup = None
+        else:
+            reply_markup = json.dumps({"inline_keyboard": buttons})
 
         payload = {
             "chat_id":    self.chat_id,
             "text":       formatted,
             "parse_mode": parse_mode,
-            # Quick reply keyboard
-            "reply_markup": json.dumps({
-                "inline_keyboard": [[
-                    {"text": "✅ Done",      "callback_data": "done"},
-                    {"text": "⏸ Pause",     "callback_data": "pause"},
-                    {"text": "📋 Status",   "callback_data": "status"},
-                ]]
-            }),
         }
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
 
-        try:
-            resp = await self._http.post(
-                f"{self._base_url}/sendMessage",
-                json=payload,
-            )
-            if resp.status_code == 200:
-                self.messages_sent += 1
-                logger.info(f"[MobileHandoff] Sent to Telegram ({len(message)} chars)")
-                return True
-            else:
-                self.last_error = f"HTTP {resp.status_code}: {resp.text[:100]}"
-                logger.error(f"[MobileHandoff] Telegram error: {self.last_error}")
-                return False
-        except Exception as e:
-            self.last_error = str(e)
-            logger.error(f"[MobileHandoff] Send failed: {e}")
-            return False
+        self._queue_outbound("sendMessage", payload)
+        return True
 
     async def send_photo_to_mobile(self, image_path: str, caption: str = "") -> bool:
-        """Send a photo/screenshot to phone."""
         if not self.is_configured():
             return False
         try:
             with open(image_path, "rb") as f:
                 img_data = f.read()
-
-            resp = await self._http.post(
-                f"{self._base_url}/sendPhoto",
-                data={"chat_id": self.chat_id, "caption": caption or "📸 Sivi Screenshot"},
-                files={"photo": (os.path.basename(image_path), img_data, "image/png")},
-            )
-            success = resp.status_code == 200
-            if success:
-                self.messages_sent += 1
-            return success
+            payload = {"chat_id": self.chat_id, "caption": caption or "📸 Sivi Screenshot"}
+            files = {"photo": (os.path.basename(image_path), img_data, "image/png")}
+            self._queue_outbound("sendPhoto", payload, files)
+            return True
         except Exception as e:
-            logger.error(f"[MobileHandoff] Photo send failed: {e}")
+            logger.error(f"[MobileHandoff] Photo read failed: {e}")
             return False
 
     async def send_file_to_mobile(self, file_path: str, caption: str = "") -> bool:
-        """Send any file to phone."""
         if not self.is_configured():
             return False
         try:
             with open(file_path, "rb") as f:
                 file_data = f.read()
-
-            resp = await self._http.post(
-                f"{self._base_url}/sendDocument",
-                data={"chat_id": self.chat_id, "caption": caption or "📎 Sivi File"},
-                files={"document": (os.path.basename(file_path), file_data)},
-            )
-            success = resp.status_code == 200
-            if success:
-                self.messages_sent += 1
-            return success
+            payload = {"chat_id": self.chat_id, "caption": caption or "📎 Sivi File"}
+            files = {"document": (os.path.basename(file_path), file_data)}
+            self._queue_outbound("sendDocument", payload, files)
+            return True
         except Exception as e:
-            logger.error(f"[MobileHandoff] File send failed: {e}")
+            logger.error(f"[MobileHandoff] File read failed: {e}")
             return False
 
-    async def send_voice_to_mobile(self, ogg_path: str) -> bool:
-        """Send a voice note to phone (OGG format)."""
-        if not self.is_configured():
-            return False
+    async def notify_screenshot(self) -> bool:
         try:
-            with open(ogg_path, "rb") as f:
-                audio_data = f.read()
-            resp = await self._http.post(
-                f"{self._base_url}/sendVoice",
-                data={"chat_id": self.chat_id},
-                files={"voice": (os.path.basename(ogg_path), audio_data, "audio/ogg")},
-            )
-            return resp.status_code == 200
+            import mss
+            from PIL import Image
+            with mss.mss() as sct:
+                monitor = sct.monitors[1]
+                img = sct.grab(monitor)
+                pil_img = Image.frombytes("RGB", img.size, img.bgra, "raw", "BGRX")
+                
+                # FIX #4: Use NamedTemporaryFile properly (thread-safe, avoids mktemp deprecation)
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                    tmp_path = tmp.name
+                    pil_img.save(tmp_path)
+                    
+            await self.send_photo_to_mobile(tmp_path, "📸 PC Screen")
+            
+            # Clean up after a short delay since it's queued asynchronously
+            async def cleanup(path):
+                await asyncio.sleep(10)
+                try:
+                    os.remove(path)
+                except:
+                    pass
+            asyncio.create_task(cleanup(tmp_path))
+            return True
         except Exception as e:
-            logger.error(f"[MobileHandoff] Voice send failed: {e}")
+            logger.error(f"[MobileHandoff] Screenshot failed: {e}")
             return False
 
-    # ── Polling (Receive Commands from Phone) ─────────────────────────────────
+    # ── Polling & Inbound Command Handling ────────────────────────────────────
 
     def start_polling(self, command_callback: Callable[[str], None]):
-        """
-        Start background task to receive commands from Telegram.
-        command_callback: called with the text from phone, injected into Sivi.
-        """
+        """Save callback. Requires start_polling_on_loop to be called inside event loop."""
+        self._command_callback = command_callback
+
+    def start_polling_on_loop(self):
+        """Actually starts the async task (Fixes bug #1 race condition)."""
         if not self.is_configured():
             logger.warning("[MobileHandoff] Not configured — polling not started.")
             return
         if self._polling:
             return
 
-        self._command_callback = command_callback
         self._polling = True
-
-        # Start as asyncio task (must be called from async context)
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                self._poll_task = loop.create_task(self._poll_loop())
-                logger.info("[MobileHandoff] 📱 Telegram polling started — phone commands active!")
-        except Exception as e:
-            logger.error(f"[MobileHandoff] Failed to start polling: {e}")
+        loop = asyncio.get_event_loop()
+        self._poll_task = loop.create_task(self._poll_loop())
+        self._outbound_worker_task = loop.create_task(self._outbound_worker())
+        logger.info("[MobileHandoff] 📱 Telegram polling & outbound queue started.")
 
     def stop_polling(self):
-        """Stop Telegram polling."""
         self._polling = False
         if self._poll_task and not self._poll_task.done():
             self._poll_task.cancel()
-        logger.info("[MobileHandoff] Telegram polling stopped.")
+        if self._outbound_worker_task and not self._outbound_worker_task.done():
+            self._outbound_worker_task.cancel()
+        logger.info("[MobileHandoff] Stopped.")
 
     async def _poll_loop(self):
-        """Long-poll Telegram for new messages from Boss's phone."""
         backoff_idx = 0
-        logger.info("[MobileHandoff] Poll loop started.")
-
         while self._polling:
             try:
                 updates = await self._get_updates()
                 if updates is None:
-                    # Network error — backoff
                     wait = RECONNECT_BACKOFF[min(backoff_idx, len(RECONNECT_BACKOFF) - 1)]
-                    logger.warning(f"[MobileHandoff] Poll error, retrying in {wait}s...")
                     backoff_idx += 1
                     await asyncio.sleep(wait)
                     continue
 
-                backoff_idx = 0  # Reset on success
-
+                backoff_idx = 0
                 for update in updates:
                     await self._handle_update(update)
 
                 await asyncio.sleep(POLL_INTERVAL)
-
             except asyncio.CancelledError:
-                logger.info("[MobileHandoff] Poll loop cancelled.")
                 break
             except Exception as e:
                 logger.error(f"[MobileHandoff] Poll loop error: {e}")
                 await asyncio.sleep(5)
 
     async def _get_updates(self) -> Optional[list]:
-        """Fetch new updates from Telegram with long-polling."""
         try:
             params = {
                 "offset":  self._last_update_id + 1,
@@ -300,42 +358,98 @@ class MobileHandoffManager:
         except Exception:
             return None
 
+    async def _download_file(self, file_id: str, suffix: str) -> Optional[str]:
+        """Download file from Telegram using file_id."""
+        try:
+            # Get file path
+            resp = await self._http.get(f"{self._base_url}/getFile", params={"file_id": file_id})
+            if resp.status_code != 200: return None
+            
+            file_path_rel = resp.json().get("result", {}).get("file_path")
+            if not file_path_rel: return None
+            
+            # Download actual file
+            dl_url = f"https://api.telegram.org/file/bot{self.bot_token}/{file_path_rel}"
+            dl_resp = await self._http.get(dl_url)
+            if dl_resp.status_code != 200: return None
+            
+            with tempfile.NamedTemporaryFile(suffix=suffix, dir=MEDIA_CACHE_DIR, delete=False) as tmp:
+                tmp.write(dl_resp.content)
+                return tmp.name
+        except Exception as e:
+            logger.error(f"[MobileHandoff] Download failed: {e}")
+            return None
+
     async def _handle_update(self, update: dict):
-        """Process a single Telegram update (message or button press)."""
         update_id = update.get("update_id", 0)
         if update_id > self._last_update_id:
             self._last_update_id = update_id
+            self._save_offset(update_id)
 
-        # Regular text message
+        self.last_activity = time.time()
+
+        # Regular Message
         message = update.get("message", {})
         if message:
             from_id = str(message.get("chat", {}).get("id", ""))
-            # Security: only accept from configured chat_id
-            if from_id != self.chat_id:
-                logger.warning(f"[MobileHandoff] Ignoring message from unknown chat {from_id}")
+            if from_id != self.chat_id: return
+            self.messages_received += 1
+
+            # Text Message
+            text = message.get("text", "").strip()
+            
+            # PC Control Menu
+            if text.lower() == "/menu":
+                await self.send_text_async("🎛 **PC Control Menu**", button_set="menu")
                 return
 
-            text = message.get("text", "").strip()
             if text:
-                self.messages_received += 1
-                logger.info(f"[MobileHandoff] 📥 Phone command: '{text}'")
+                logger.info(f"[MobileHandoff] 📥 Phone cmd: '{text}'")
+                await self._process_inbound_command(text)
 
-                # Inject into Sivi's Gemini stream
-                if self._command_callback:
-                    try:
-                        self._command_callback(
-                            f"[PHONE COMMAND from Boss's mobile]: {text}"
-                        )
-                    except Exception as e:
-                        logger.error(f"[MobileHandoff] Callback error: {e}")
+            # Photo Message
+            photos = message.get("photo", [])
+            if photos:
+                # Get highest res photo
+                best_photo = photos[-1]
+                file_id = best_photo.get("file_id")
+                caption = message.get("caption", "Analyze this image.")
+                
+                await self.send_text_async("📸 Downloading image for Vision analysis...")
+                local_path = await self._download_file(file_id, ".jpg")
+                if local_path:
+                    # Convert to base64 for Gemini
+                    with open(local_path, "rb") as img_f:
+                        b64 = base64.b64encode(img_f.read()).decode("utf-8")
+                    
+                    # Clean up
+                    try: os.remove(local_path)
+                    except: pass
+                    
+                    # Inject into Gemini
+                    prompt = f"[PHONE IMAGE RECEIVED from Boss. Base64 payload attached. Please analyze this image based on the caption: '{caption}'.]\n[BASE64_IMG:{b64}]"
+                    await self._process_inbound_command(prompt, raw_inject=True)
 
-                # Acknowledge on phone
-                await self._send_text_async(
-                    f"✅ Got it Boss! Processing: _{text}_",
-                    parse_mode="Markdown",
-                )
+            # Voice Note
+            voice = message.get("voice")
+            if voice:
+                file_id = voice.get("file_id")
+                await self.send_text_async("🎤 Transcribing voice note via Gemini...")
+                local_path = await self._download_file(file_id, ".ogg")
+                if local_path:
+                    # Inform orchestrator/bridge to transcribe this OGG file via Gemini API
+                    prompt = f"[PHONE VOICE NOTE RECEIVED from Boss at path: {local_path}. Please transcribe this audio file and respond to the content.]"
+                    await self._process_inbound_command(prompt, raw_inject=True)
 
-        # Inline button callback
+            # Location
+            location = message.get("location")
+            if location:
+                lat = location.get("latitude")
+                lon = location.get("longitude")
+                prompt = f"Boss sent location from phone: Lat {lat}, Lon {lon}. Provide weather and a brief summary for this location."
+                await self._process_inbound_command(prompt, raw_inject=True)
+
+        # Inline Button Callback
         callback = update.get("callback_query", {})
         if callback:
             cb_id   = callback.get("id")
@@ -343,48 +457,69 @@ class MobileHandoffManager:
             from_id = str(callback.get("message", {}).get("chat", {}).get("id", ""))
 
             if from_id == self.chat_id:
-                await self._answer_callback(cb_id)
-                if self._command_callback:
-                    action_map = {
-                        "done":   "[PHONE BUTTON: Boss pressed Done on mobile]",
-                        "pause":  "[PHONE BUTTON: Boss pressed Pause — stop current task]",
-                        "status": "[PHONE BUTTON: Boss wants system status from mobile]",
-                    }
-                    action = action_map.get(cb_data, f"[PHONE BUTTON: {cb_data}]")
-                    self._command_callback(action)
+                try:
+                    await self._http.post(
+                        f"{self._base_url}/answerCallbackQuery",
+                        json={"callback_query_id": cb_id, "text": "✅ Received!"}
+                    )
+                except: pass
+                
+                if cb_data.startswith("cmd:"):
+                    cmd = cb_data.split("cmd:", 1)[1]
+                    await self.send_text_async(f"✅ Processing: {cmd}", button_set="none")
+                    await self._process_inbound_command(cmd)
+                elif cb_data == "done":
+                    pass
 
-    async def _answer_callback(self, callback_query_id: str):
-        """Acknowledge inline button press (required by Telegram)."""
-        try:
-            await self._http.post(
-                f"{self._base_url}/answerCallbackQuery",
-                json={"callback_query_id": callback_query_id, "text": "✅ Sivi received!"},
-            )
-        except Exception:
-            pass
+    async def _process_inbound_command(self, text: str, raw_inject: bool = False):
+        """
+        Smart processing of inbound commands.
+        If it's a known PC command (e.g., 'volume up'), bypass Gemini and execute directly.
+        Otherwise, queue for Gemini injection.
+        """
+        if not raw_inject:
+            from core.command_parser import parse_command
+            from core.sivi_controller import controller
+            
+            # Try to parse it as a direct PC command
+            cmd = parse_command(text)
+            
+            # If it's a direct operational command, bypass Gemini for instant execution
+            instant_cmds = ["VOLUME_UP", "VOLUME_DOWN", "MUTE", "TAKE_SCREENSHOT", "LOCK_SCREEN", "SLEEP", "BRIGHTNESS_UP", "BRIGHTNESS_DOWN"]
+            
+            if cmd and cmd.type in instant_cmds:
+                logger.info(f"[MobileHandoff] Instant bypass execution for: {cmd.type}")
+                try:
+                    res = await asyncio.to_thread(controller.execute_command, cmd)
+                    await self.send_text_async(f"✅ Executed: {cmd.type}\nResult: {res}", button_set="none")
+                    return
+                except Exception as e:
+                    await self.send_text_async(f"❌ Failed: {e}", button_set="none")
+                    return
 
-    # ── Convenience Methods ───────────────────────────────────────────────────
+        # Not an instant bypass command — inject into Gemini stream
+        # If Gemini is disconnected, queue it.
+        if self._command_callback:
+            # We check connectivity state outside (in bridge_server)
+            self._pending_inbound_commands.append(text)
+            self.flush_pending_commands()
 
-    async def notify_screenshot(self) -> bool:
-        """Take a screenshot and send it to phone."""
-        try:
-            import mss, tempfile, os
-            with mss.mss() as sct:
-                monitor = sct.monitors[1]
-                img = sct.grab(monitor)
-                from PIL import Image
-                pil_img = Image.frombytes("RGB", img.size, img.bgra, "raw", "BGRX")
-                tmp = tempfile.mktemp(suffix=".png")
-                pil_img.save(tmp)
-            result = await self.send_photo_to_mobile(tmp, "📸 Boss ka screen abhi")
-            try:
-                os.remove(tmp)
-            except Exception:
-                pass
-            return result
-        except Exception as e:
-            logger.error(f"[MobileHandoff] Screenshot failed: {e}")
-            return False
+    def flush_pending_commands(self):
+        """Called by Bridge Server when Gemini connects to flush offline queue."""
+        if not self._command_callback: return
+        
+        while self._pending_inbound_commands:
+            text = self._pending_inbound_commands.popleft()
+            if text.startswith("[PHONE"):
+                formatted = text
+            else:
+                formatted = f"[PHONE COMMAND from Boss's mobile]: {text}"
+            
+            success = self._command_callback(formatted)
+            # If callback returns False (meaning Gemini disconnected), we put it back and break
+            if success is False:
+                self._pending_inbound_commands.appendleft(text)
+                break
 
     async def close(self):
         self.stop_polling()

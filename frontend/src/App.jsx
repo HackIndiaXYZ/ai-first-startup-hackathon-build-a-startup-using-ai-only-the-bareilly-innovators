@@ -43,6 +43,10 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [offlineStatus, setOfflineStatus] = useState(null);
   const [mobileStatus, setMobileStatus] = useState(null);
+  
+  // Phase 3: Hologram Dynamic UI State
+  const [activeCard, setActiveCard] = useState(null);
+  const cardTimeoutRef = useRef(null);
 
   const showToast = (message, type = 'error') => {
     setToast({ message, type });
@@ -112,6 +116,15 @@ export default function App() {
           setDashboardData(msg.data);
         } else if (msg.type === 'system_info') {
           setSysInfo(msg.data);
+        } else if (msg.type === 'dynamic_card') {
+          if (msg.action === 'show') {
+            setActiveCard(msg.data);
+            // Auto-dismiss after 30 seconds
+            if (cardTimeoutRef.current) clearTimeout(cardTimeoutRef.current);
+            cardTimeoutRef.current = setTimeout(() => setActiveCard(null), 30000);
+          } else {
+            setActiveCard(null);
+          }
         }
       } catch {}
     };
@@ -340,6 +353,13 @@ export default function App() {
       <div style={{ position: 'relative', flex:1, display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden' }}>
         <iframe ref={iframeRef} src="/particles.html" style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 'none', zIndex: 0, opacity: 0.6, pointerEvents: 'none' }} />
         
+        {/* Dynamic Theme Shift overlay */}
+        <div style={{ 
+          position: 'absolute', top:0, left:0, right:0, bottom:0, zIndex: 0, 
+          background: activeCard && activeCard.theme_color ? `radial-gradient(circle at center, ${activeCard.theme_color}30 0%, transparent 70%)` : 'transparent',
+          transition: 'background 0.8s ease'
+        }}/>
+        
         {/* Top Header */}
         <div style={{ position: 'relative', zIndex: 1, textAlign: 'center', paddingTop: '5px' }}>
           <h1 className="responsive-header">SMART BRIEFINGS</h1>
@@ -455,6 +475,43 @@ export default function App() {
               </div>
             </div>
 
+            {/* Telemetry Card (Phase 6) */}
+            <div className="glass-panel hover-glow" style={{ padding: '15px', flex: 1, display: 'flex', flexDirection: 'column', marginBottom: '15px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <div style={{ fontSize: '11px', color: '#94a3b8', letterSpacing: '1px', display: 'flex', alignItems: 'center', gap:'8px' }}>
+                  <Activity size={14}/> SYSTEM TELEMETRY
+                </div>
+                <div style={{ background: 'rgba(59,130,246,0.2)', color: '#60a5fa', padding: '2px 6px', borderRadius: '10px', fontSize: '9px', fontWeight: 'bold' }}>LIVE</div>
+              </div>
+              
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', overflowY: 'auto', maxHeight: '180px', paddingRight: '5px' }}>
+                {/* Disk & Network Summary */}
+                <div style={{ display: 'flex', gap: '10px', marginBottom: '5px' }}>
+                  <div style={{ flex: 1, background: 'rgba(15,23,42,0.4)', padding: '8px', borderRadius: '8px', fontSize: '11px', color: '#cbd5e1' }}>
+                    <div style={{ color: '#94a3b8', fontSize: '9px', marginBottom: '4px' }}>DISK USAGE</div>
+                    <span style={{ fontFamily: 'monospace' }}>{dashboardData?.telemetry?.disk || "Loading..."}</span>
+                  </div>
+                  <div style={{ flex: 1, background: 'rgba(15,23,42,0.4)', padding: '8px', borderRadius: '8px', fontSize: '11px', color: '#cbd5e1' }}>
+                    <div style={{ color: '#94a3b8', fontSize: '9px', marginBottom: '4px' }}>NETWORK</div>
+                    <span style={{ fontFamily: 'monospace' }}>{dashboardData?.telemetry?.network || "Loading..."}</span>
+                  </div>
+                </div>
+
+                {/* Top Processes */}
+                <div style={{ color: '#94a3b8', fontSize: '9px', marginTop: '5px', letterSpacing: '1px' }}>TOP MEMORY PROCESSES</div>
+                {Array.isArray(dashboardData?.telemetry?.processes) && dashboardData.telemetry.processes.length > 0 ? (
+                  dashboardData.telemetry.processes.map((proc, idx) => (
+                    <div key={idx} style={{ background: 'rgba(15,23,42,0.4)', padding: '8px 10px', borderRadius: '8px', fontSize: '12px', color: '#cbd5e1', display: 'flex', justifyContent: 'space-between', borderLeft: '2px solid #8b5cf6' }}>
+                      <span style={{ fontWeight: 'bold' }}>{proc.name}</span>
+                      <span style={{ color: '#f87171', fontFamily: 'monospace' }}>{proc.memory_mb} MB</span>
+                    </div>
+                  ))
+                ) : (
+                  <div style={{ fontSize: '12px', color: '#64748b', fontStyle: 'italic' }}>Fetching processes...</div>
+                )}
+              </div>
+            </div>
+
             {/* News Card */}
             <div className="glass-panel hover-glow" style={{ padding: '15px', flex: 1, display: 'flex', flexDirection: 'column' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
@@ -479,6 +536,58 @@ export default function App() {
             
           </div>
         </div>
+
+        {/* HOLOGRAM CARD ENGINE */}
+        {activeCard && (
+          <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 5, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(3, 7, 18, 0.7)', backdropFilter: 'blur(10px)', padding: '20px' }}>
+            <div className="hologram-card-container" style={{'--card-glow': activeCard.theme_color || '#3b82f6'}}>
+              <div className="hologram-card">
+                
+                {/* Close Button */}
+                <button onClick={() => setActiveCard(null)} style={{ position:'absolute', top:'15px', right:'15px', background:'rgba(0,0,0,0.5)', border:'1px solid rgba(255,255,255,0.2)', color:'#fff', width:'30px', height:'30px', borderRadius:'50%', cursor:'pointer', zIndex:10, display:'flex', alignItems:'center', justifyContent:'center' }}>×</button>
+
+                {activeCard.category === 'LOADING' ? (
+                   <div className="holo-general" style={{ padding: '40px', justifyContent: 'center', alignItems: 'center', flexDirection: 'column', gap: '20px' }}>
+                     <div style={{ width: '50px', height: '50px', border: '4px solid rgba(255,255,255,0.1)', borderTopColor: 'var(--card-glow)', borderRadius: '50%', animation: 'spin 1s linear infinite' }}/>
+                     <div style={{ fontSize: '18px', fontWeight: 600, color: '#e2e8f0' }}>Researching {activeCard.title}...</div>
+                   </div>
+                ) : activeCard.category === 'PERSON' ? (
+                  <div className="holo-person">
+                    <img src={activeCard.image} alt={activeCard.title} className="avatar" />
+                    <h2 style={{ fontSize: '32px', fontWeight: 800, color: '#fff', marginBottom: '8px' }}>{activeCard.title}</h2>
+                    <div style={{ background: 'rgba(255,255,255,0.1)', padding: '4px 12px', borderRadius: '20px', fontSize: '12px', letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--card-glow)', marginBottom: '20px', fontWeight: 700 }}>{activeCard.subtitle}</div>
+                    <p style={{ fontSize: '15px', color: '#cbd5e1', lineHeight: 1.6, maxWidth: '90%' }}>{activeCard.summary}</p>
+                  </div>
+                ) : activeCard.category === 'LOCATION' ? (
+                  <div className="holo-location">
+                    <img src={activeCard.image} alt={activeCard.title} className="hero" />
+                    <div style={{ padding: '30px' }}>
+                      <h2 style={{ fontSize: '36px', fontWeight: 800, color: '#fff', marginTop: '-60px', position: 'relative', zIndex: 2, textShadow: '0 2px 10px rgba(0,0,0,0.8)' }}>{activeCard.title}</h2>
+                      <div style={{ fontSize: '14px', color: 'var(--card-glow)', fontWeight: 600, marginBottom: '15px', textTransform: 'uppercase', letterSpacing: '1px' }}>{activeCard.subtitle}</div>
+                      <p style={{ fontSize: '15px', color: '#cbd5e1', lineHeight: 1.6 }}>{activeCard.summary}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="holo-tech">
+                    <img src={activeCard.image} alt={activeCard.title} className="side-image" />
+                    <div style={{ padding: '30px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                      <div style={{ fontSize: '12px', color: 'var(--card-glow)', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '8px' }}>{activeCard.subtitle}</div>
+                      <h2 style={{ fontSize: '28px', fontWeight: 800, color: '#fff', marginBottom: '15px', lineHeight: 1.2 }}>{activeCard.title}</h2>
+                      <p style={{ fontSize: '14px', color: '#cbd5e1', lineHeight: 1.6 }}>{activeCard.summary}</p>
+                    </div>
+                  </div>
+                )}
+                
+                {activeCard.category !== 'LOADING' && (
+                  <div style={{ background: 'rgba(0,0,0,0.4)', padding: '10px 20px', fontSize: '11px', color: '#64748b', display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                    <span>Data Source: {activeCard.source}</span>
+                    <span>Hologram Layout: {activeCard.category}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
           {/* Bottom Bar Features */}
         <div className="bottom-bar-responsive" style={{ position: 'relative', zIndex: 1 }}>

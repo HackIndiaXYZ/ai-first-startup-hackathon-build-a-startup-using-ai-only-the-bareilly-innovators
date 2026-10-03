@@ -7,7 +7,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-
+from core.process_manager import process_manager
+from core.network_diagnostics import network_diagnostics
 class SystemController:
     def __init__(self):
         pass
@@ -113,9 +114,11 @@ class SystemController:
                  f"(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods).WmiSetBrightness(1, $new)"],
                 capture_output=True, text=True, timeout=5
             )
+            if result.returncode != 0:
+                return "Boss, this monitor does not support software brightness controls."
             return "Brightness increased."
         except Exception as e:
-            return f"Could not adjust brightness: {e}"
+            return f"Boss, this monitor does not support software brightness controls."
 
     def brightness_down(self, amount: int = 10):
         try:
@@ -126,9 +129,11 @@ class SystemController:
                  f"(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods).WmiSetBrightness(1, $new)"],
                 capture_output=True, text=True, timeout=5
             )
+            if result.returncode != 0:
+                return "Boss, this monitor does not support software brightness controls."
             return "Brightness decreased."
         except Exception as e:
-            return f"Could not adjust brightness: {e}"
+            return f"Boss, this monitor does not support software brightness controls."
 
     # ── Screenshot ────────────────────────────────────────────────
 
@@ -259,6 +264,64 @@ class SystemController:
     def media_prev(self):
         pyautogui.press('prevtrack')
         return "Went to previous track."
+
+    # ── Phase 2: Advanced System Control ──────────────────────────
+
+    def list_processes(self):
+        procs = process_manager.get_running_processes(limit=10)
+        if not procs: return "Could not retrieve process list."
+        res = "Top Processes:\n"
+        for p in procs:
+            res += f"- {p['name']} (PID: {p['pid']}) - {p['memory_mb']}MB\n"
+        return res
+
+    def kill_process(self, process_identifier: str):
+        return process_manager.kill_process(process_identifier)
+
+    def get_network_info(self):
+        status = network_diagnostics.get_network_status()
+        ips = network_diagnostics.get_ip_address()
+        return f"{status}\nLocal IP: {ips.get('local_ip')}\nPublic IP: {ips.get('public_ip')}"
+
+    def ping_host(self, host: str):
+        return network_diagnostics.ping_host(host)
+
+    def get_disk_info(self):
+        try:
+            import psutil
+            res = "Disk Usage:\n"
+            for part in psutil.disk_partitions(all=False):
+                if os.name == 'nt' and ('cdrom' in part.opts or part.fstype == ''):
+                    continue
+                try:
+                    usage = psutil.disk_usage(part.mountpoint)
+                    free_gb = round(usage.free / (1024**3), 1)
+                    total_gb = round(usage.total / (1024**3), 1)
+                    res += f"- {part.device}: {free_gb}GB free of {total_gb}GB ({usage.percent}% used)\n"
+                except Exception:
+                    pass
+            return res
+        except Exception as e:
+            return f"Error getting disk info: {e}"
+
+    def empty_recycle_bin(self):
+        try:
+            import winshell
+            winshell.recycle_bin().empty(confirm=False, show_progress=False, sound=False)
+            return "Recycle bin emptied successfully."
+        except Exception as e:
+            return f"Failed to empty recycle bin: {e}"
+
+    def get_system_uptime(self):
+        try:
+            import psutil
+            boot_time = datetime.fromtimestamp(psutil.boot_time())
+            uptime = datetime.now() - boot_time
+            hours, remainder = divmod(int(uptime.total_seconds()), 3600)
+            minutes, _ = divmod(remainder, 60)
+            return f"System has been running for {hours} hours and {minutes} minutes (since {boot_time.strftime('%I:%M %p')})."
+        except Exception as e:
+            return "Could not determine system uptime."
 
 
 system_controller = SystemController()

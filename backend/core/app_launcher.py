@@ -2,7 +2,9 @@ import os
 import sys
 import subprocess
 import re
+import re
 import webbrowser
+import difflib
 
 # Sanitize app name to prevent command injection
 _SAFE_APP_NAME = re.compile(r'^[a-zA-Z0-9\s\-_.]+$')
@@ -58,6 +60,13 @@ class AppLauncher:
             "github":        "https://github.com",
             "chatgpt":       "https://chat.openai.com",
             "claude":        "https://claude.ai",
+            "cursor":        "cursor.exe",
+            "brave":         "brave.exe",
+            "firefox":       "firefox.exe",
+            "postman":       "postman.exe",
+            "obs":           "obs64.exe",
+            "figma":         "figma.exe",
+            "notion":        "notion.exe"
         }
 
     def launch_app(self, app_name: str) -> str:
@@ -67,8 +76,17 @@ class AppLauncher:
         if not _SAFE_APP_NAME.match(app_name):
             return f"Invalid application name: '{app_name}'"
 
-        target = self.apps.get(app_name, app_name)
-        
+        target = self.apps.get(app_name)
+        if not target:
+            # Fuzzy match
+            matches = difflib.get_close_matches(app_name, self.apps.keys(), n=1, cutoff=0.7)
+            if matches:
+                target = self.apps[matches[0]]
+                print(f"[AppLauncher] Fuzzy matched '{app_name}' to '{matches[0]}'")
+                app_name = matches[0]
+            else:
+                target = app_name
+
         # If it's a URL or URI scheme, open with webbrowser
         if target.startswith("http") or target.endswith(":"):
             try:
@@ -88,6 +106,16 @@ class AppLauncher:
                 os.startfile(target)
                 return f"Opening {app_name}."
         except (FileNotFoundError, OSError):
+            # Check if it's actually a file in the user's system before falling back to taskbar search
+            try:
+                from core.file_manager import file_manager
+                file_path = file_manager.get_file_path(app_name)
+                if file_path:
+                    os.startfile(file_path)
+                    return f"Opening file {app_name}."
+            except Exception:
+                pass
+
             # If startfile fails (e.g., unknown .exe), fallback to Windows Taskbar Search
             try:
                 import pyautogui

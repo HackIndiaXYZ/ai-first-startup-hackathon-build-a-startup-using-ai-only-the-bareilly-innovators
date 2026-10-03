@@ -19,7 +19,7 @@ from genai_runner import run_with_key_pool
 
 class DeveloperTools:
     def __init__(self):
-        self.model_name = 'gemini-2.0-flash'
+        self.model_name = 'gemini-2.5-flash'
 
 
 

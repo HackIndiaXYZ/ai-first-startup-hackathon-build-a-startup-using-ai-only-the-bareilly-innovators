@@ -43,7 +43,7 @@ MODELS = {
     },
     "flash_live": {
         "label": "Flash Live (Fast)",
-        "model": "models/gemini-2.0-flash-live-001",
+        "model": "models/gemini-2.5-flash-native-audio-preview-12-2025",
     },
     "pro_audio": {
         "label": "Pro Audio Dialog",
@@ -313,19 +313,30 @@ class GeminiLiveClient:
 
     async def _receive_loop(self):
         """Main loop to receive and parse messages from Gemini."""
-        try:
-            async for message in self._ws:
-                try:
-                    data = json.loads(message)
-                    self._parse_server_message(data)
-                except json.JSONDecodeError:
-                    logger.warning("Received non-JSON message")
-                except Exception as e:
-                    logger.error(f"Error parsing message: {e}")
-        except websockets.exceptions.ConnectionClosed:
-            logger.info("WebSocket connection closed")
-        except asyncio.CancelledError:
-            pass
+        while self._connected:
+            try:
+                ws_current = self._ws
+                if not ws_current:
+                    await asyncio.sleep(0.1)
+                    continue
+                async for message in ws_current:
+                    try:
+                        data = json.loads(message)
+                        self._parse_server_message(data)
+                    except json.JSONDecodeError:
+                        logger.warning("Received non-JSON message")
+                    except Exception as e:
+                        logger.error(f"Error parsing message: {e}")
+            except websockets.exceptions.ConnectionClosed:
+                if self._ws is not ws_current:
+                    # Handover occurred: we closed the old WS deliberately
+                    logger.info("Seamless handover: switching receive loop to new WebSocket")
+                    continue
+                else:
+                    logger.info("WebSocket connection closed genuinely")
+                    break
+            except asyncio.CancelledError:
+                break
 
     def _parse_server_message(self, data: dict):
         """Parse serverContent fields from Gemini response."""
@@ -399,17 +410,42 @@ class GeminiLiveClient:
     # ── Session Renewal Loop ──────────────────────────────────────
 
     async def _session_renewal_loop(self):
-        """Renew session before 10-minute timeout."""
+        """Renew session seamlessly before 10-minute timeout."""
         try:
             while self._connected:
                 await asyncio.sleep(10)  # Check every 10 seconds
                 elapsed = time.time() - self._session_start_time
                 if elapsed >= SESSION_RENEW_AFTER:
-                    logger.info("Session approaching timeout, renewing...")
-                    # Close current connection — auto-reconnect will handle the rest
-                    if self._ws:
-                        await self._ws.close()
-                    break
+                    logger.info("Session approaching timeout, performing seamless background handover...")
+                    
+                    current_key = self._pick_key()
+                    url = f"{WS_BASE_URL}?key={current_key}"
+                    try:
+                        new_ws = await websockets.connect(
+                            url,
+                            max_size=None,
+                            ping_interval=20,
+                            ping_timeout=20,
+                            close_timeout=5,
+                        )
+                        setup_msg = self._build_setup_message()
+                        await new_ws.send(json.dumps(setup_msg))
+                        
+                        response = await new_ws.recv()
+                        data = json.loads(response)
+                        
+                        if "setupComplete" in data:
+                            logger.info("✅ Seamless handover: New session established!")
+                            old_ws = self._ws
+                            self._ws = new_ws
+                            self._session_start_time = time.time()
+                            if old_ws:
+                                await old_ws.close()
+                        else:
+                            logger.warning(f"Handover setup failed: {data}")
+                    except Exception as e:
+                        logger.error(f"Seamless handover failed: {e}")
+                    
         except asyncio.CancelledError:
             pass
 

@@ -19,7 +19,7 @@ class SwarmManager:
         """Pushes a message back to Sivi so she can speak it out loud."""
         try:
             payload = {"text": f"[SWARM_AGENT_REPORT] {message}"}
-            requests.post(f"{self.bridge_url}/voice/send-text", json=payload, timeout=5)
+            requests.post(f"{self.bridge_url}/voice/send-text", json=payload, timeout=15)
         except Exception as e:
             logger.error(f"Swarm agent failed to report back: {e}")
 

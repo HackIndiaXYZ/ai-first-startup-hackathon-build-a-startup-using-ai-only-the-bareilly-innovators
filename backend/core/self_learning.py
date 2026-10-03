@@ -307,6 +307,19 @@ Do NOT repeat the same failing command."""
         
         return prompt
 
+    async def auto_diagnose(self, cmd_tag: str, cmd_type: str, error_msg: str) -> Optional[str]:
+        """
+        Fast self-diagnosis using Groq. Returns a corrected CMD tag if possible.
+        """
+        try:
+            from core.groq_brain import groq_brain
+            result = await groq_brain.diagnose_error(cmd_tag, cmd_type, error_msg)
+            if result and ("[CMD:" in result or "EXPLAIN:" in result):
+                return result
+        except Exception as e:
+            logger.error(f"[SelfLearn] Auto-diagnose failed: {e}")
+        return None
+
     # ── Suggest Auto-Retry ────────────────────────────────────────
 
     def should_auto_retry(self, category: str, cmd_type: str) -> bool:

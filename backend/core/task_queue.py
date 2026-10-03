@@ -19,13 +19,13 @@ def _execute_sivi_command(command_string: str, instruction: str):
     try:
         # First send the notification to Sivi to speak
         msg = f"[SYSTEM_EVENT: CRON TRIGGER] The scheduled task '{instruction}' is now executing."
-        requests.post(f"{bridge_url}/voice/send-text", json={"text": msg}, timeout=5)
+        requests.post(f"{bridge_url}/voice/send-text", json={"text": msg}, timeout=15)
         
         # Then we send the actual parsed command payload to the bridge to execute
         # In a fully integrated system, the bridge server would have a /execute-command endpoint.
         # For now, we simulate execution by sending a system text that forces Gemini to do it.
         execute_msg = f"Boss's scheduled task triggered: {command_string}. Please execute it now."
-        requests.post(f"{bridge_url}/voice/send-text", json={"text": execute_msg}, timeout=5)
+        requests.post(f"{bridge_url}/voice/send-text", json={"text": execute_msg}, timeout=15)
         
         logger.info(f"Executed scheduled task: {instruction}")
     except Exception as e:

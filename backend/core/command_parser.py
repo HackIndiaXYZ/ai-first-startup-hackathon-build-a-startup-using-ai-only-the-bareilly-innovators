@@ -1,5 +1,5 @@
 """
-SIVI — Voice Command Parser (PC Edition)
+SIVI -- Voice Command Parser (PC Edition)
 Parses transcribed speech (Hinglish + English) into structured PC commands.
 Returns None if no command matches so Gemini handles it as conversation.
 """
@@ -7,6 +7,7 @@ Returns None if no command matches so Gemini handles it as conversation.
 import re
 import string
 import difflib
+from typing import Optional
 from dataclasses import dataclass, field
 
 
@@ -14,6 +15,7 @@ from dataclasses import dataclass, field
 class PCCommand:
     type: str
     params: dict = field(default_factory=dict)
+    requires_confirmation: bool = False
 
 
 # ── App Name Mappings ─────────────────────────────────────────────
@@ -65,7 +67,7 @@ RESTART_KEYWORDS = ["restart the computer", "reboot the computer", "restart karo
 SLEEP_KEYWORDS = ["sleep mode", "put to sleep", "so jao computer",
                   "sleep karo computer", "computer ko sleep karo",
                   "ok bye", "goodbye", "see you later", "alvida", "phir milenge", "good night sivi"]
-# NOTE: bare 'bye', 'tata' removed — too short and cause false positives in long sentences
+# NOTE: bare 'bye', 'tata' removed -- too short and cause false positives in long sentences
 BRIGHTNESS_UP_KEYWORDS = ["brightness up", "brightness badhao", "make it brighter",
                            "screen bright karo", "roshan karo", "increase brightness"]
 BRIGHTNESS_DOWN_KEYWORDS = ["brightness down", "brightness kam karo", "make it dimmer",
@@ -138,6 +140,7 @@ DEV_EXECUTE_SCRIPT_KEYWORDS = ["execute script to", "write script to", "create s
 DEV_SPAWN_SUBAGENT_KEYWORDS = ["spawn subagent to", "spawn agent to", "monitor in background"]
 DEV_OPEN_EDITOR_KEYWORDS = ["open in editor", "open in vs code", "open in vscode"]
 DEV_CLOSE_EDITOR_KEYWORDS = ["close current file", "close editor tab", "band karo tab"]
+
 DEV_MONITOR_LOGS_KEYWORDS = ["monitor logs in", "watch logs in", "tail logs for", "crash detective for"]
 DEV_DB_QUERY_KEYWORDS = ["query database", "run sql", "check database"]
 SWARM_KEYWORDS = ["delegate to swarm", "assign background task", "research in background", "background research"]
@@ -148,6 +151,7 @@ TIMER_KEYWORDS = ["set timer for", "set alarm for", "timer lagao", "alarm lagao"
 SCHEDULE_TASK_KEYWORDS = ["schedule task to", "schedule command to", "run this later", "schedule event to"]
 LIST_SCHEDULED_KEYWORDS = ["what is scheduled", "list scheduled tasks", "list my alarms"]
 VOLUME_SET_KEYWORDS = ["set volume to", "volume set karo", "volume ko"]
+SHOW_RESEARCH_KEYWORDS = ["show_research:"]
 TAB_NEXT_KEYWORDS = ["next tab", "agle tab", "go to next tab"]
 TAB_PREV_KEYWORDS = ["previous tab", "pichle tab", "go to previous tab"]
 TAB_NEW_KEYWORDS = ["new tab", "open tab", "naya tab"]
@@ -160,7 +164,27 @@ UIA_CLICK_KEYWORDS = ["uia click", "native click"]
 UIA_TYPE_KEYWORDS = ["uia type", "native type"]
 UIA_READ_KEYWORDS = ["uia read", "native read", "read app tree"]
 
-
+# ── New Phase 1 Commands ──────────────────────────────────────────────
+PROCESS_KILL_KEYWORDS = ["kill process", "end process", "force close", "band karo process", "stop task"]
+PROCESS_LIST_KEYWORDS = ["list processes", "running tasks", "kya chal raha hai process", "cpu usage"]
+DISK_INFO_KEYWORDS = ["disk info", "storage info", "kitna space hai", "hard drive status", "free space"]
+IP_ADDRESS_KEYWORDS = ["my ip", "ip address", "mera ip kya hai", "network ip"]
+PING_KEYWORDS = ["ping", "check latency"]
+AUDIO_DEVICE_KEYWORDS = ["switch audio", "audio device", "change speaker", "speaker badlo"]
+DISPLAY_SETTINGS_KEYWORDS = ["display settings", "screen resolution"]
+SCREEN_RECORD_KEYWORDS = ["record screen", "start recording", "screen record karo"]
+EMPTY_RECYCLE_KEYWORDS = ["empty recycle bin", "clear bin", "kachra saaf karo", "empty trash"]
+NETWORK_STATUS_KEYWORDS = ["network status", "internet speed", "wifi status", "internet chal raha hai"]
+INSTALLED_APPS_KEYWORDS = ["installed apps", "list apps", "programs list"]
+STARTUP_MANAGE_KEYWORDS = ["startup apps", "manage startup"]
+CLIPBOARD_HISTORY_KEYWORDS = ["clipboard history", "copy history"]
+HOTSPOT_TOGGLE_KEYWORDS = ["hotspot on", "hotspot off", "toggle hotspot", "hotspot chalao"]
+NIGHT_LIGHT_KEYWORDS = ["night light", "eye care mode", "blue light filter"]
+DO_NOT_DISTURB_KEYWORDS = ["do not disturb", "dnd", "focus mode", "disturb mat karo"]
+TASK_SCHEDULER_KEYWORDS = ["task scheduler", "scheduled tasks"]
+SERVICE_CONTROL_KEYWORDS = ["restart service", "stop service", "start service"]
+POWER_PLAN_KEYWORDS = ["power plan", "battery saver", "performance mode"]
+SYSTEM_UPTIME_KEYWORDS = ["uptime", "system uptime", "kitni der se chal raha hai", "how long is pc on"]
 
 class CommandTrie:
     def __init__(self):
@@ -241,7 +265,18 @@ def _init_trie():
         "BROWSER_READ_PAGE": BROWSER_READ_PAGE_KEYWORDS, "BROWSER_FULLSCREEN": BROWSER_FULLSCREEN_KEYWORDS,
         "BROWSER_STATUS": BROWSER_STATUS_KEYWORDS, "BROWSER_SCROLL": BROWSER_SCROLL_KEYWORDS,
         "TAB_NEXT": TAB_NEXT_KEYWORDS, "TAB_PREV": TAB_PREV_KEYWORDS, "TAB_NEW": TAB_NEW_KEYWORDS,
-        "TAB_CLOSE": TAB_CLOSE_KEYWORDS, "VOLUME_SET": VOLUME_SET_KEYWORDS
+        "TAB_CLOSE": TAB_CLOSE_KEYWORDS, "VOLUME_SET": VOLUME_SET_KEYWORDS,
+        "SHOW_RESEARCH": SHOW_RESEARCH_KEYWORDS,
+        "PROCESS_KILL": PROCESS_KILL_KEYWORDS, "PROCESS_LIST": PROCESS_LIST_KEYWORDS,
+        "DISK_INFO": DISK_INFO_KEYWORDS, "IP_ADDRESS": IP_ADDRESS_KEYWORDS,
+        "PING": PING_KEYWORDS, "AUDIO_DEVICE": AUDIO_DEVICE_KEYWORDS,
+        "DISPLAY_SETTINGS": DISPLAY_SETTINGS_KEYWORDS, "SCREEN_RECORD": SCREEN_RECORD_KEYWORDS,
+        "EMPTY_RECYCLE": EMPTY_RECYCLE_KEYWORDS, "NETWORK_STATUS": NETWORK_STATUS_KEYWORDS,
+        "INSTALLED_APPS": INSTALLED_APPS_KEYWORDS, "STARTUP_MANAGE": STARTUP_MANAGE_KEYWORDS,
+        "CLIPBOARD_HISTORY": CLIPBOARD_HISTORY_KEYWORDS, "HOTSPOT_TOGGLE": HOTSPOT_TOGGLE_KEYWORDS,
+        "NIGHT_LIGHT": NIGHT_LIGHT_KEYWORDS, "DO_NOT_DISTURB": DO_NOT_DISTURB_KEYWORDS,
+        "TASK_SCHEDULER": TASK_SCHEDULER_KEYWORDS, "SERVICE_CONTROL": SERVICE_CONTROL_KEYWORDS,
+        "POWER_PLAN": POWER_PLAN_KEYWORDS, "SYSTEM_UPTIME": SYSTEM_UPTIME_KEYWORDS
     }
     for cmd_type, kw_list in mapping.items():
         for kw in kw_list:
@@ -262,6 +297,9 @@ def parse_command(text: str) -> "PCCommand | None":
         "READ_WINDOWS", "FORGET_ALL", "ANALYZE_EMOTION", "DESCRIBE_SCENE", "DEV_GIT_STATUS",
         "TAB_NEXT", "TAB_PREV", "TAB_NEW", "TAB_CLOSE", "BROWSER_READ_PAGE", "BROWSER_FULLSCREEN",
         "BROWSER_STATUS", "REFRESH_DASHBOARD", "CALENDAR_EVENTS", "ANALYZE_WELLNESS",
+        "PROCESS_LIST", "DISK_INFO", "IP_ADDRESS", "EMPTY_RECYCLE", "NETWORK_STATUS",
+        "SYSTEM_UPTIME", "INSTALLED_APPS", "STARTUP_MANAGE", "CLIPBOARD_HISTORY",
+        "HOTSPOT_TOGGLE", "NIGHT_LIGHT", "DO_NOT_DISTURB", "TASK_SCHEDULER"
     }
     if text_upper in VALID_NO_PARAM_TYPES:
         return PCCommand(type=text_upper)
@@ -269,7 +307,7 @@ def parse_command(text: str) -> "PCCommand | None":
     # Fast-path 2: technical tag types with parameters (e.g. "OPEN_APP chrome")
     parts = text.strip().split(" ", 1)
     if len(parts) == 2:
-        cmd_type = parts[0].upper()
+        cmd_type = parts[0].upper().rstrip(":")
         cmd_val = parts[1].strip()
         
         # Strip trailing punctuation for the value if needed
@@ -317,12 +355,34 @@ def parse_command(text: str) -> "PCCommand | None":
                 return PCCommand(type="SET_TIMER", params={"seconds": amount * multiplier, "label": "Timer"})
             except:
                 pass
+        elif cmd_type == "SHOW_RESEARCH":
+             return PCCommand(type="SHOW_RESEARCH", params={"topic": cmd_val})
+        elif cmd_type == "PROCESS_KILL":
+             return PCCommand(type="PROCESS_KILL", params={"process_name": cmd_val})
+        elif cmd_type == "PING":
+             return PCCommand(type="PING", params={"host": cmd_val})
+        elif cmd_type == "AUDIO_DEVICE":
+             return PCCommand(type="AUDIO_DEVICE", params={"device_name": cmd_val})
+        elif cmd_type in ["DISPLAY_SETTINGS", "SCREEN_RECORD", "SERVICE_CONTROL"]:
+             return PCCommand(type=cmd_type, params={"action": cmd_val})
+        elif cmd_type == "POWER_PLAN":
+             return PCCommand(type="POWER_PLAN", params={"plan": cmd_val})
 
     # Normalise
     text_lower = text.lower().strip().replace('"', '').replace("'", "")
     while text_lower and text_lower[-1] in string.punctuation:
         text_lower = text_lower[:-1]
     text_lower = text_lower.strip()
+
+    # ── Strip Wake Words BEFORE Trie routing ──────────────────────
+    # Must come before Trie so the Trie doesn't see "sivi" as part of input
+    _wake_words = ["hey sivi", "hey jarvis", "sivi", "jarvis"]
+    for _ww in _wake_words:
+        if text_lower.startswith(_ww + " "):
+            text_lower = text_lower[len(_ww):].strip()
+            break
+        elif text_lower == _ww:
+            return None  # Bare wake word with no command
 
     # ── Advanced O(1) Trie Routing ────────────────────────────────
     cmd_type, match_len = _global_trie.search_longest_prefix(text_lower)
@@ -339,16 +399,6 @@ def parse_command(text: str) -> "PCCommand | None":
         return PCCommand(type=cmd_type)
 
 
-    # ── Strip Wake Words / Assistant Names ────────────────────────
-    # Longest-first order to avoid partial stripping (e.g. "hey sivi" before "hey")
-    wake_words_to_strip = ["hey sivi", "hey jarvis", "sivi", "jarvis"]
-    for name in wake_words_to_strip:
-        if text_lower.startswith(name + " "):
-            text_lower = text_lower[len(name):].strip()
-            break  # Only strip once
-        elif text_lower == name:
-            text_lower = ""
-            break
 
     # ── WiFi / Bluetooth (MUST be before generic open/close) ──────
     if re.search(r'\bwifi\b|\bwi-fi\b|\bwireless\b|\binternet\b', text_lower):
@@ -370,17 +420,16 @@ def parse_command(text: str) -> "PCCommand | None":
         return PCCommand(type="VOLUME_SET", params={"level": max(0, min(100, level))})
 
     # ── Timer / Alarm ─────────────────────────────────────────────
-    for kw in TIMER_KEYWORDS:
-        if kw in text_lower:
-            rest = text_lower.replace(kw, "").strip()
-            # Extract number + unit
-            t_match = re.search(r'(\d+)\s*(second|minute|hour|sec|min|hr)', rest)
-            if t_match:
-                amount = int(t_match.group(1))
-                unit = t_match.group(2)
-                seconds = amount * (3600 if unit.startswith("h") else 60 if unit.startswith("m") else 1)
-                label = rest.split(t_match.group(0))[-1].strip() or "Timer"
-                return PCCommand(type="SET_TIMER", params={"seconds": seconds, "label": label})
+    if cmd_type == "SET_TIMER":
+        kw = matched_kw
+        rest = text_lower.split(kw, 1)[-1].strip()
+        t_match = re.search(r'(\d+)\s*(second|minute|hour|sec|min|hr)', rest)
+        if t_match:
+            amount = int(t_match.group(1))
+            unit = t_match.group(2)
+            seconds = amount * (3600 if unit.startswith("h") else 60 if unit.startswith("m") else 1)
+            label = rest.split(t_match.group(0))[-1].strip() or "Timer"
+            return PCCommand(type="SET_TIMER", params={"seconds": seconds, "label": label})
 
     # ── Open App (MUST be before Open File to avoid "open file explorer" collision) ──
     # Skip if the text matches a developer command (e.g. "run command git status")
@@ -388,30 +437,28 @@ def parse_command(text: str) -> "PCCommand | None":
     _is_dev_cmd = any(text_lower.startswith(dp) for dp in _dev_prefixes)
     if not _is_dev_cmd:
         if cmd_type == "OPEN_APP":
-            if True:
-                kw = matched_kw
-                app_name = text_lower.split(kw, 1)[-1].strip()
-                if app_name:
-                    # Check if it's an explicit file open request like "open file X"
-                    if app_name.startswith("file ") and app_name != "file explorer":
-                        pass  # Handled by longest prefix match
-                    resolved = APP_ALIASES.get(app_name)
-                    # Fuzzy match: if exact alias not found, try close matches (typo tolerance)
-                    if not resolved:
-                        close_matches = difflib.get_close_matches(app_name, APP_ALIASES.keys(), n=1, cutoff=0.75)
-                        if close_matches:
-                            resolved = APP_ALIASES[close_matches[0]]
-                        else:
-                            resolved = app_name
-                    return PCCommand(type="OPEN_APP", params={"app_name": resolved, "raw": app_name})
+            kw = matched_kw
+            app_name = text_lower.split(kw, 1)[-1].strip()
+            if app_name:
+                # Check if it's an explicit file open request like "open file X"
+                if app_name.startswith("file ") and app_name != "file explorer":
+                    pass  # Handled by longest prefix match
+                resolved = APP_ALIASES.get(app_name)
+                # Fuzzy match: if exact alias not found, try close matches (typo tolerance)
+                if not resolved:
+                    close_matches = difflib.get_close_matches(app_name, APP_ALIASES.keys(), n=1, cutoff=0.75)
+                    if close_matches:
+                        resolved = APP_ALIASES[close_matches[0]]
+                    else:
+                        resolved = app_name
+                return PCCommand(type="OPEN_APP", params={"app_name": resolved, "raw": app_name})
 
     # ── Open File ─────────────────────────────────────────────────
     if cmd_type == "OPEN_FILE":
-        if True:
-            kw = matched_kw
-            name = text_lower.replace(kw, "").strip()
-            if name:
-                return PCCommand(type="OPEN_FILE", params={"name": name})
+        kw = matched_kw
+        name = text_lower.replace(kw, "").strip()
+        if name:
+            return PCCommand(type="OPEN_FILE", params={"name": name})
 
     # ── Shutdown / Restart / Sleep ────────────────────────────────
     if cmd_type == "SHUTDOWN":
@@ -433,72 +480,83 @@ def parse_command(text: str) -> "PCCommand | None":
     if cmd_type == "BROWSER_STATUS": return PCCommand(type="BROWSER_STATUS")
     
     if cmd_type == "BROWSER_SCROLL":
-        if True:
-            kw = matched_kw
-            if "up" in text_lower: d = "up"
-            elif "top" in text_lower: d = "top"
-            elif "bottom" in text_lower: d = "bottom"
-            else: d = "down"
-            return PCCommand(type="BROWSER_SCROLL", params={"direction": d})
+        kw = matched_kw
+        if "up" in text_lower: d = "up"
+        elif "top" in text_lower: d = "top"
+        elif "bottom" in text_lower: d = "bottom"
+        else: d = "down"
+        return PCCommand(type="BROWSER_SCROLL", params={"direction": d})
 
     # ── Close App ─────────────────────────────────────────────────
     if cmd_type == "CLOSE_APP":
-        if True:
-            kw = matched_kw
-            app_name = text_lower.split(kw, 1)[-1].strip()
-            # Guard: bare "close" with no app name should not close random foreground window
-            if not app_name:
-                return None
-            if app_name != "tab":
-                return PCCommand(type="CLOSE_APP", params={"app_name": app_name})
+        kw = matched_kw
+        app_name = text_lower.split(kw, 1)[-1].strip()
+        # Guard: bare "close" with no app name should not close random foreground window
+        if not app_name:
+            return None
+        if app_name != "tab":
+            return PCCommand(type="CLOSE_APP", params={"app_name": app_name})
 
     # ── Switch App ────────────────────────────────────────────────
     if cmd_type == "SWITCH_APP":
-        if True:
-            kw = matched_kw
-            app_name = text_lower.split(kw, 1)[-1].strip()
-            # Avoid collision: 'switch to professional/gf/dev' goes to personality; 'go to next/prev tab' goes to tab
-            if app_name and app_name not in ["professional", "assistant", "gf", "developer"] \
-                    and "tab" not in app_name:
-                return PCCommand(type="SWITCH_APP", params={"app_name": app_name})
-
+        kw = matched_kw
+        app_name = text_lower.split(kw, 1)[-1].strip()
+        # Avoid collision: 'switch to professional/gf/dev' goes to personality; 'go to next/prev tab' goes to tab
+        if app_name and app_name not in ["professional", "assistant", "gf", "developer"] \
+                and "tab" not in app_name:
+            return PCCommand(type="SWITCH_APP", params={"app_name": app_name})
     # ── Volume ────────────────────────────────────────────────────
+    if cmd_type in ["VOLUME_UP", "VOLUME_DOWN", "MUTE"]:
+        return PCCommand(type=cmd_type)
 
     # ── Brightness ────────────────────────────────────────────────
+    if cmd_type in ["BRIGHTNESS_UP", "BRIGHTNESS_DOWN"]:
+        return PCCommand(type=cmd_type)
 
     # ── Screenshot ────────────────────────────────────────────────
+    if cmd_type == "SCREENSHOT":
+        return PCCommand(type="SCREENSHOT")
 
     # ── Screen Reader ─────────────────────────────────────────────
+    if cmd_type == "READ_SCREEN":
+        return PCCommand(type="READ_SCREEN")
 
     # ── Lock Screen ───────────────────────────────────────────────
+    if cmd_type == "LOCK_SCREEN":
+        return PCCommand(type="LOCK_SCREEN")
 
     # ── Media Controls ────────────────────────────────────────────
+    if cmd_type in ["MEDIA_PLAY_PAUSE", "MEDIA_NEXT", "MEDIA_PREV"]:
+        return PCCommand(type=cmd_type)
 
+    # ── Power Controls ────────────────────────────────────────────
+    if cmd_type in ["SLEEP", "SHUTDOWN", "RESTART"]:
+        return PCCommand(type=cmd_type, requires_confirmation=(cmd_type != "SLEEP"))
     # ── Play on YouTube / Spotify ─────────────────────────────────
     if cmd_type == "PLAY_YOUTUBE":
-        if True:
-            kw = matched_kw
-            query = text_lower.split(kw, 1)[-1].strip()
-            if query:
-                if "spotify" in text_lower:
-                    return PCCommand(type="PLAY_SPOTIFY", params={"query": query.replace("on spotify", "").strip()})
-                return PCCommand(type="PLAY_YOUTUBE", params={"query": query})
+        kw = matched_kw
+        query = text_lower.split(kw, 1)[-1].strip()
+        if query:
+            if "spotify" in text_lower:
+                return PCCommand(type="PLAY_SPOTIFY", params={"query": query.replace("on spotify", "").strip()})
+            return PCCommand(type="PLAY_YOUTUBE", params={"query": query})
+        else:
+            # No query after 'play'/'chalao' -- user means play/pause media
+            return PCCommand(type="MEDIA_PLAY_PAUSE")
 
     # ── Google Search ─────────────────────────────────────────────
     if cmd_type == "SEARCH":
-        if True:
-            kw = matched_kw
-            query = text_lower.split(kw, 1)[-1].strip()
-            if query:
-                return PCCommand(type="SEARCH", params={"query": query})
+        kw = matched_kw
+        query = text_lower.split(kw, 1)[-1].strip()
+        if query:
+            return PCCommand(type="SEARCH", params={"query": query})
 
     # ── Type Text ─────────────────────────────────────────────────
     if cmd_type == "TYPE_TEXT":
-        if True:
-            kw = matched_kw
-            content = text.strip().split(kw, 1)[-1].strip().strip(' "\'')
-            if content:
-                return PCCommand(type="TYPE_TEXT", params={"text": content})
+        kw = matched_kw
+        content = text.strip().split(kw, 1)[-1].strip().strip(' "\'')
+        if content:
+            return PCCommand(type="TYPE_TEXT", params={"text": content})
 
     # ── Keyboard Press ────────────────────────────────────────────
     for kw in PRESS_KEYWORDS:
@@ -534,45 +592,39 @@ def parse_command(text: str) -> "PCCommand | None":
 
     # ── File Operations ───────────────────────────────────────────
     if cmd_type == "CREATE_FILE":
-        if True:
-            kw = matched_kw
-            name = text_lower.split(kw, 1)[-1].strip()
-            if name:
-                return PCCommand(type="CREATE_FILE", params={"name": name})
+        kw = matched_kw
+        name = text_lower.split(kw, 1)[-1].strip()
+        if name:
+            return PCCommand(type="CREATE_FILE", params={"name": name})
 
     if cmd_type == "DELETE_FILE":
-        if True:
-            kw = matched_kw
-            name = text_lower.split(kw, 1)[-1].strip()
-            if name:
-                return PCCommand(type="DELETE_FILE", params={"name": name})
+        kw = matched_kw
+        name = text_lower.split(kw, 1)[-1].strip()
+        if name:
+            return PCCommand(type="DELETE_FILE", params={"name": name})
 
     if cmd_type == "CREATE_FOLDER":
-        if True:
-            kw = matched_kw
-            name = text_lower.split(kw, 1)[-1].strip()
-            if name:
-                return PCCommand(type="CREATE_FOLDER", params={"name": name})
+        kw = matched_kw
+        name = text_lower.split(kw, 1)[-1].strip()
+        if name:
+            return PCCommand(type="CREATE_FOLDER", params={"name": name})
 
     if cmd_type == "DELETE_FOLDER":
-        if True:
-            kw = matched_kw
-            name = text_lower.split(kw, 1)[-1].strip()
-            if name:
-                return PCCommand(type="DELETE_FOLDER", params={"name": name})
+        kw = matched_kw
+        name = text_lower.split(kw, 1)[-1].strip()
+        if name:
+            return PCCommand(type="DELETE_FOLDER", params={"name": name})
 
     if cmd_type == "FIND_FILE":
-        if True:
-            kw = matched_kw
-            name = text_lower.split(kw, 1)[-1].strip()
-            if name:
-                return PCCommand(type="FIND_FILE", params={"name": name})
+        kw = matched_kw
+        name = text_lower.split(kw, 1)[-1].strip()
+        if name:
+            return PCCommand(type="FIND_FILE", params={"name": name})
 
     if cmd_type == "LIST_FILES":
-        if True:
-            kw = matched_kw
-            folder = text_lower.split(kw, 1)[-1].strip()
-            return PCCommand(type="LIST_FILES", params={"folder": folder})
+        kw = matched_kw
+        folder = text_lower.split(kw, 1)[-1].strip()
+        return PCCommand(type="LIST_FILES", params={"folder": folder})
 
     for kw in LIST_WINDOWS_KEYWORDS:
         if kw in text_lower:
@@ -594,21 +646,19 @@ def parse_command(text: str) -> "PCCommand | None":
     # ── System Monitor / Weather ────────────────────────────────────────────
 
     if cmd_type == "GET_WEATHER":
-        if True:
-            kw = matched_kw
-            # Extract location
-            loc = text_lower.split(kw, 1)[-1].strip()
-            if not loc:
-                loc = "" # Let wttr.in auto-detect via IP
-            return PCCommand(type="GET_WEATHER", params={"location": loc})
+        kw = matched_kw
+        # Extract location
+        loc = text_lower.split(kw, 1)[-1].strip()
+        if not loc:
+            loc = "" # Let wttr.in auto-detect via IP
+        return PCCommand(type="GET_WEATHER", params={"location": loc})
 
     # ── Memory Vault ──────────────────────────────────────────────
     if cmd_type == "REMEMBER":
-        if True:
-            kw = matched_kw
-            fact = text_lower.replace(kw, "").strip()
-            if fact:
-                return PCCommand(type="REMEMBER", params={"fact": fact})
+        kw = matched_kw
+        fact = text_lower.replace(kw, "").strip()
+        if fact:
+            return PCCommand(type="REMEMBER", params={"fact": fact})
 
     for kw in FORGET_KEYWORDS:
         if kw in text_lower:
@@ -694,51 +744,50 @@ def parse_command(text: str) -> "PCCommand | None":
 
     # ── WhatsApp ──────────────────────────────────────────────────
     if cmd_type == "SEND_WHATSAPP":
-        if True:
-            kw = matched_kw
-            rest = text_lower.split(kw, 1)[-1].strip()
-            if rest.startswith("to "):
-                rest = rest[3:].strip()
+        kw = matched_kw
+        rest = text_lower.split(kw, 1)[-1].strip()
+        if rest.startswith("to "):
+            rest = rest[3:].strip()
             
-            number = rest
-            content = ""
-            # Priority order: explicit message separators first, then Hindi postpositions
-            for sep in [" saying ", " that ", " ki ", " bolke ", " bata ", " bol do ", " likh do ", " message "]:
-                if sep in rest:
-                    parts = rest.split(sep, 1)
-                    number = parts[0].strip()
-                    content = parts[1].strip()
-                    break
-            
-            # Secondary: try ' ko ' as Hindi separator ("Rahul ko hello" → name=Rahul, msg=hello)
-            if not content and " ko " in rest:
-                parts = rest.split(" ko ", 1)
+        number = rest
+        content = ""
+        # Priority order: explicit message separators first, then Hindi postpositions
+        for sep in [" saying ", " that ", " ki ", " bolke ", " bata ", " bol do ", " likh do ", " message "]:
+            if sep in rest:
+                parts = rest.split(sep, 1)
                 number = parts[0].strip()
                 content = parts[1].strip()
+                break
+            
+        # Secondary: try ' ko ' as Hindi separator ("Rahul ko hello" -> name=Rahul, msg=hello)
+        if not content and " ko " in rest:
+            parts = rest.split(" ko ", 1)
+            number = parts[0].strip()
+            content = parts[1].strip()
 
-            # Fallback: Only split on bare space if remainder looks like a phone number (all digits)
-            # This prevents multi-word names like "Rao Alok Yadav" from being split incorrectly
-            if not content and " " in rest:
-                first_word = rest.split(" ", 1)[0].strip()
-                # If first word is all digits, it's a phone number — split is safe
-                if first_word.replace("+", "").replace("-", "").isdigit():
-                    number = first_word
-                    content = rest.split(" ", 1)[1].strip()
-                else:
-                    # Multi-word contact name — keep entire rest as contact, no content
-                    number = rest
-                    content = ""
+        # Fallback: Only split on bare space if remainder looks like a phone number (all digits)
+        # This prevents multi-word names like "Rao Alok Yadav" from being split incorrectly
+        if not content and " " in rest:
+            first_word = rest.split(" ", 1)[0].strip()
+            # If first word is all digits, it's a phone number -- split is safe
+            if first_word.replace("+", "").replace("-", "").isdigit():
+                number = first_word
+                content = rest.split(" ", 1)[1].strip()
+            else:
+                # Multi-word contact name -- keep entire rest as contact, no content
+                number = rest
+                content = ""
 
-            # Strip trailing Hindi postposition 'ko' from contact name
-            # e.g. "mom ko" → "mom", "rahul ko" → "rahul"
-            if number.endswith(" ko"):
-                number = number[:-3].strip()
+        # Strip trailing Hindi postposition 'ko' from contact name
+        # e.g. "mom ko" -> "mom", "rahul ko" -> "rahul"
+        if number.endswith(" ko"):
+            number = number[:-3].strip()
                 
-            return PCCommand(type="SEND_WHATSAPP", params={"number": number, "content": content})
+        return PCCommand(type="SEND_WHATSAPP", params={"number": number, "content": content})
 
     for kw in WHATSAPP_READ_KEYWORDS:
         if kw in text_lower:
-            # Extract contact name: "read messages from Rahul" → contact="Rahul"
+            # Extract contact name: "read messages from Rahul" -> contact="Rahul"
             contact = ""
             for prefix in ["read messages from ", "check messages from ", "read whatsapp from "]:
                 if prefix in text_lower:
@@ -835,10 +884,28 @@ def parse_command(text: str) -> "PCCommand | None":
         if kw in text_lower:
             return PCCommand(type="DEV_CLOSE_EDITOR")
 
+    for kw in DEV_PATCH_CODE_KEYWORDS:
+        if text_lower.startswith(kw):
+            parts = text_lower.replace(kw, "").split(" to ")
+            if len(parts) >= 2:
+                filename = parts[0].strip()
+                instructions = parts[1].strip()
+                return PCCommand(type="DEV_PATCH_CODE", params={"filename": filename, "instructions": instructions})
+
+    for kw in DEV_AUTO_FIX_KEYWORDS:
+        if text_lower.startswith(kw):
+            script_path = text_lower.replace(kw, "").strip()
+            return PCCommand(type="DEV_AUTO_FIX", params={"script_path": script_path})
+
     for kw in DEV_MONITOR_LOGS_KEYWORDS:
         if kw in text_lower:
             filename = text_lower.replace(kw, "").strip()
             return PCCommand(type="DEV_MONITOR_LOGS", params={"filename": filename})
+
+    for kw in SHOW_RESEARCH_KEYWORDS:
+        if text_lower.startswith(kw):
+            topic = text_lower.replace(kw, "", 1).strip()
+            return PCCommand(type="SHOW_RESEARCH", params={"topic": topic})
 
     for kw in DEV_DB_QUERY_KEYWORDS:
         if kw in text_lower:
@@ -874,20 +941,19 @@ def parse_command(text: str) -> "PCCommand | None":
 
     # NOTE: Timer keywords already handled at line 280 (SET_TIMER). This block is for SCHEDULE_TASK only.
     if cmd_type == "SCHEDULE_TASK":
-        if True:
-            kw = matched_kw
-            rest = text_lower.split(kw, 1)[-1].strip()
-            parts = rest.split(" in ")
-            instruction = parts[0].strip()
-            time_str = parts[1].strip() if len(parts) > 1 else "60 seconds"
-            seconds = 60
-            if "minute" in time_str:
-                num = re.search(r'\d+', time_str)
-                if num: seconds = int(num.group()) * 60
-            elif "second" in time_str:
-                num = re.search(r'\d+', time_str)
-                if num: seconds = int(num.group())
-            return PCCommand(type="SCHEDULE_TASK", params={"instruction": instruction, "command": instruction, "delay": seconds})
+        kw = matched_kw
+        rest = text_lower.split(kw, 1)[-1].strip()
+        parts = rest.split(" in ")
+        instruction = parts[0].strip()
+        time_str = parts[1].strip() if len(parts) > 1 else "60 seconds"
+        seconds = 60
+        if "minute" in time_str:
+            num = re.search(r'\d+', time_str)
+            if num: seconds = int(num.group()) * 60
+        elif "second" in time_str:
+            num = re.search(r'\d+', time_str)
+            if num: seconds = int(num.group())
+        return PCCommand(type="SCHEDULE_TASK", params={"instruction": instruction, "command": instruction, "delay": seconds})
 
     for kw in LIST_SCHEDULED_KEYWORDS:
         if kw in text_lower:
@@ -916,6 +982,55 @@ def parse_command(text: str) -> "PCCommand | None":
             app = text_lower.replace(kw, "").strip()
             return PCCommand(type="UIA_READ", params={"app_name": app})
 
+    # ── Phase 1 System Commands ───────────────────────────────────────
+    if cmd_type == "PROCESS_KILL":
+        process_name = text_lower.replace(matched_kw, "").strip()
+        return PCCommand(type="PROCESS_KILL", params={"process_name": process_name}, requires_confirmation=True)
+    if cmd_type == "PROCESS_LIST":
+        return PCCommand(type="PROCESS_LIST")
+    if cmd_type == "DISK_INFO":
+        return PCCommand(type="DISK_INFO")
+    if cmd_type == "IP_ADDRESS":
+        return PCCommand(type="IP_ADDRESS")
+    if cmd_type == "PING":
+        host = text_lower.replace(matched_kw, "").strip()
+        if not host: host = "google.com"
+        return PCCommand(type="PING", params={"host": host})
+    if cmd_type == "AUDIO_DEVICE":
+        device = text_lower.replace(matched_kw, "").strip()
+        return PCCommand(type="AUDIO_DEVICE", params={"device_name": device})
+    if cmd_type == "DISPLAY_SETTINGS":
+        return PCCommand(type="DISPLAY_SETTINGS")
+    if cmd_type == "SCREEN_RECORD":
+        return PCCommand(type="SCREEN_RECORD")
+    if cmd_type == "EMPTY_RECYCLE":
+        return PCCommand(type="EMPTY_RECYCLE", requires_confirmation=True)
+    if cmd_type == "NETWORK_STATUS":
+        return PCCommand(type="NETWORK_STATUS")
+    if cmd_type == "INSTALLED_APPS":
+        return PCCommand(type="INSTALLED_APPS")
+    if cmd_type == "STARTUP_MANAGE":
+        app = text_lower.replace(matched_kw, "").strip()
+        return PCCommand(type="STARTUP_MANAGE", params={"app_name": app})
+    if cmd_type == "CLIPBOARD_HISTORY":
+        return PCCommand(type="CLIPBOARD_HISTORY")
+    if cmd_type == "HOTSPOT_TOGGLE":
+        return PCCommand(type="HOTSPOT_TOGGLE")
+    if cmd_type == "NIGHT_LIGHT":
+        return PCCommand(type="NIGHT_LIGHT")
+    if cmd_type == "DO_NOT_DISTURB":
+        return PCCommand(type="DO_NOT_DISTURB")
+    if cmd_type == "TASK_SCHEDULER":
+        return PCCommand(type="TASK_SCHEDULER")
+    if cmd_type == "SERVICE_CONTROL":
+        service = text_lower.replace(matched_kw, "").strip()
+        return PCCommand(type="SERVICE_CONTROL", params={"service_name": service}, requires_confirmation=True)
+    if cmd_type == "POWER_PLAN":
+        plan = text_lower.replace(matched_kw, "").strip()
+        return PCCommand(type="POWER_PLAN", params={"plan_name": plan})
+    if cmd_type == "SYSTEM_UPTIME":
+        return PCCommand(type="SYSTEM_UPTIME")
+
     # ── MCP (Model Context Protocol) ──────────────────────────────
     if text_lower.startswith("mcp "):
         parts = text_lower[4:].split(" ", 2)
@@ -930,4 +1045,31 @@ def parse_command(text: str) -> "PCCommand | None":
                 args = {"query": args_str}
             return PCCommand(type="MCP_CALL", params={"server": server, "tool": tool, "args": args})
 
+    return None
+
+async def parse_voice_command_async(text: str) -> Optional[PCCommand]:
+    """
+    Async wrapper for parse_voice_command that falls back to Groq for
+    fuzzy intent classification if the Regex/Trie parser fails.
+    """
+    import logging
+    logger = logging.getLogger("sivi.parser")
+    
+    # 1. Try standard deterministic parsing
+    cmd = parse_voice_command(text)
+    if cmd:
+        return cmd
+        
+    # 2. If no match, ask Groq for fuzzy matching (fast)
+    try:
+        from core.groq_brain import groq_brain
+        result = await groq_brain.classify_intent(text)
+        if result:
+            # Result should be [CMD: ...] format
+            logger.info(f"[Parser] Groq matched intent: {result}")
+            # Recursively call parse_voice_command on the newly generated tag
+            return parse_voice_command(result)
+    except Exception as e:
+        logger.error(f"[Parser] Groq intent classification failed: {e}")
+        
     return None

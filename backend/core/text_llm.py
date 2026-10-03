@@ -28,6 +28,7 @@ import httpx
 
 from core.gemini_key_pool import key_pool
 from core.offline_fallback import offline_fallback
+from core.groq_brain import groq_brain
 
 logger = logging.getLogger("sivi.text_llm")
 
@@ -39,7 +40,7 @@ GEMINI_REST_BASE = (
 )
 
 # Default model for text tasks — fast, 1M context, free-tier friendly
-DEFAULT_TEXT_MODEL = "gemini-2.0-flash"
+DEFAULT_TEXT_MODEL = "gemini-1.5-flash"
 
 # If all keys are cooling, wait this long before returning an error
 MAX_WAIT_SECONDS = 10
@@ -83,6 +84,13 @@ class TextLLM:
         Returns a human-readable error string (never raises) so
         Gemini Live can read it aloud to the user.
         """
+        # Tier 1: Groq (Lightning Fast)
+        groq_result = await groq_brain.complete(prompt, system, max_tokens, temperature)
+        if groq_result:
+            return groq_result
+            
+        # Tier 2: Gemini REST
+        logger.info("[TextLLM] Groq unavailable/rate-limited, falling back to Gemini REST.")
         tried: set[str] = set()
 
         while True:

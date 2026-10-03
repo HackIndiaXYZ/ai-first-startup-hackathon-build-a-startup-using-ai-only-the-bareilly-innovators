@@ -80,12 +80,42 @@
       const basePositions = new Float32Array(PARTICLE_COUNT * 3);
 
       for (let i = 0; i < PARTICLE_COUNT; i++) {
-        const phi = Math.acos(-1 + (2 * i) / PARTICLE_COUNT);
-        const theta = Math.sqrt(PARTICLE_COUNT * Math.PI) * phi;
+        let x, y, z;
+        const rand = Math.random();
         
-        const x = 2.5 * Math.cos(theta) * Math.sin(phi);
-        const y = 2.5 * Math.sin(theta) * Math.sin(phi);
-        const z = 2.5 * Math.cos(phi);
+        if (rand < 0.25) {
+          // Head (Sphere)
+          const u = Math.random();
+          const v = Math.random();
+          const thetaS = u * 2.0 * Math.PI;
+          const phiS = Math.acos(2.0 * v - 1.0);
+          const r = 1.0 - (Math.random() * 0.15); // Slight thickness
+          x = r * Math.sin(phiS) * Math.cos(thetaS);
+          y = r * Math.cos(phiS) + 2.3;
+          z = r * Math.sin(phiS) * Math.sin(thetaS);
+        } else if (rand < 0.35) {
+          // Neck (Cylinder)
+          const thetaC = Math.random() * 2.0 * Math.PI;
+          const r = 0.35 + (Math.random() * 0.1);
+          const h = Math.random() * 0.8; // 0 to 0.8
+          x = r * Math.cos(thetaC);
+          y = h + 0.6; 
+          z = r * Math.sin(thetaC);
+        } else {
+          // Chest / Shoulders (Half Ellipsoid)
+          const u = Math.random();
+          const v = Math.random(); // 0 to 1
+          const thetaS = u * 2.0 * Math.PI;
+          const phiS = Math.acos(v); // 0 to PI/2
+          
+          const rx = 2.4 - (Math.random() * 0.3); // Shoulder width
+          const ry = 2.2 - (Math.random() * 0.3); // Chest height
+          const rz = 1.0 - (Math.random() * 0.2); // Chest depth
+          
+          x = rx * Math.sin(phiS) * Math.cos(thetaS);
+          y = ry * Math.cos(phiS) - 1.6; // Base of chest
+          z = rz * Math.sin(phiS) * Math.sin(thetaS);
+        }
 
         positions[i * 3] = x;
         positions[i * 3 + 1] = y;
@@ -116,7 +146,7 @@
       });
 
       particles = new THREE.Points(geometry, material);
-      particles.position.y = 1.5; 
+      particles.position.y = 0; // Centered
       scene.add(particles);
 
       const clock = new THREE.Clock();
@@ -126,23 +156,22 @@
         const time = clock.getElapsedTime();
         const posAttr = particles.geometry.attributes.position;
 
-        // Rotate slowly
-        particles.rotation.y += 0.002;
-        particles.rotation.x += 0.001;
+        // Rotate slowly only on Y axis (humanoid standing upright)
+        particles.rotation.y += 0.003;
 
-        // Base scale + extra scale based on amplitude (dramatic expansion)
-        const s = 1.0 + amplitude * 0.8;
+        // Base scale + extra scale based on amplitude (slight breathing)
+        const s = 1.0 + amplitude * 0.15;
         particles.scale.lerp(new THREE.Vector3(s, s, s), 0.15);
 
-        // Add intense bubbling/breathing to particles
+        // Add intense bubbling/breathing to particles when talking
         for (let i = 0; i < PARTICLE_COUNT; i++) {
           const ix = i * 3;
           // When amplitude is high, make particles vibrate aggressively
-          const jitter = amplitude * (Math.random() - 0.5) * 1.2;
+          const jitter = amplitude * (Math.random() - 0.5) * 0.6;
           
-          posAttr.array[ix] = basePositions[ix] + Math.sin(time * 4 + i) * 0.03 * (1 + amplitude * 12) + jitter;
-          posAttr.array[ix+1] = basePositions[ix+1] + Math.cos(time * 4 + i) * 0.03 * (1 + amplitude * 12) + jitter;
-          posAttr.array[ix+2] = basePositions[ix+2] + Math.sin(time * 5 + i) * 0.03 * (1 + amplitude * 12) + jitter;
+          posAttr.array[ix] = basePositions[ix] + Math.sin(time * 4 + i) * 0.02 * (1 + amplitude * 8) + jitter;
+          posAttr.array[ix+1] = basePositions[ix+1] + Math.cos(time * 4 + i) * 0.02 * (1 + amplitude * 8) + jitter;
+          posAttr.array[ix+2] = basePositions[ix+2] + Math.sin(time * 5 + i) * 0.02 * (1 + amplitude * 8) + jitter;
         }
         posAttr.needsUpdate = true;
 

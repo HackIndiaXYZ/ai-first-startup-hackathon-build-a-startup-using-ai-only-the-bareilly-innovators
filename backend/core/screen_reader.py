@@ -16,7 +16,7 @@ from core.genai_runner import run_with_key_pool
 
 class ScreenReader:
     def __init__(self):
-        self.model_name = "gemini-2.0-flash"
+        self.model_name = "gemini-2.5-flash"
 
     def capture_screen(self) -> Image.Image:
         """Full screen capture using Pillow."""

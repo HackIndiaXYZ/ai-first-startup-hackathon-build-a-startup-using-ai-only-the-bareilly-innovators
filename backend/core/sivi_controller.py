@@ -311,6 +311,7 @@ class SiviController:
             if t == "DEV_SPAWN_SUBAGENT":return dev_tools.spawn_subagent(p.get("goal"))
             if t == "DEV_OPEN_EDITOR":  return dev_tools.open_in_editor(p.get("filename"))
             if t == "DEV_CLOSE_EDITOR": return dev_tools.close_current_file()
+
             if t == "DEV_MONITOR_LOGS": return log_detective.start_monitoring(p.get("filename"))
             if t == "DEV_DB_QUERY":     return database_whisperer.execute_read_query(p.get("connection_string"), p.get("query"))
 
@@ -331,6 +332,16 @@ class SiviController:
                         return loop.run_until_complete(mcp_router.call_tool(p.get("server"), p.get("tool"), p.get("args")))
                 except Exception as e:
                     return f"MCP call failed: {e}"
+
+            # ── Phase 1 & 2 System Commands ───────────────────────
+            if t == "PROCESS_KILL":     return system_controller.kill_process(p.get("process_name"))
+            if t == "PROCESS_LIST":     return system_controller.list_processes()
+            if t == "DISK_INFO":        return system_controller.get_disk_info()
+            if t == "IP_ADDRESS":       return system_controller.get_network_info()
+            if t == "PING":             return system_controller.ping_host(p.get("host"))
+            if t == "EMPTY_RECYCLE":    return system_controller.empty_recycle_bin()
+            if t == "NETWORK_STATUS":   return system_controller.get_network_info()
+            if t == "SYSTEM_UPTIME":    return system_controller.get_system_uptime()
 
             # ── Dashboard Refresh ─────────────────────────────────
             if t == "REFRESH_DASHBOARD":

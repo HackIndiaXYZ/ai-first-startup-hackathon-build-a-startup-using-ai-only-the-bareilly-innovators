@@ -79,6 +79,13 @@ class BackgroundMonitor:
                         f"Proactively interrupt the user to warn them. You can also output [CMD: brightness down] to save battery if you want.]"
                     )
                     self._send_to_bridge(alert_msg)
+                    
+                    # Push to phone directly
+                    try:
+                        from core.mobile_handoff import mobile_handoff
+                        mobile_handoff.send_to_mobile(f"⚠️ **PC Battery Low**\nBattery is at {percent}%. Please plug in the charger!", button_set="system")
+                    except Exception as e:
+                        print(f"Failed to push battery alert to phone: {e}")
         except Exception as e:
             print(f"Battery check failed: {e}")
 
